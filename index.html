@@ -849,6 +849,83 @@
             transform: translateY(2px);
             box-shadow: 0 2px 0 #7a2e24;
         }
+
+        /* XOR 二次加密开关样式 */
+        .xor-toggle-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 0px;
+            padding: 8px 0;
+        }
+        .xor-toggle-label {
+            color: #ffb09c;
+            font-weight: 500;
+            font-size: 1.1rem;
+            white-space: nowrap;
+        }
+        .xor-toggle-switch {
+            position: relative;
+            width: 60px;
+            height: 32px;
+            cursor: pointer;
+        }
+        .xor-toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .xor-toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #3a2e2a;
+            transition: 0.3s;
+            border-radius: 32px;
+            border: 1px solid #6f554b;
+        }
+        .xor-toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 24px;
+            width: 24px;
+            left: 4px;
+            bottom: 3px;
+            background-color: #ffdac9;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+        .xor-toggle-switch input:checked + .xor-toggle-slider {
+            background-color: #2a7a3a;
+            border-color: #8feca0;
+        }
+        .xor-toggle-switch input:checked + .xor-toggle-slider:before {
+            transform: translateX(28px);
+        }
+
+        @media screen and (min-width: 769px) {
+            .xor-toggle-wrapper {
+                gap: 0px;
+            }
+            .xor-toggle-label {
+                font-size: 2rem;
+            }
+            .xor-toggle-switch {
+                width: 80px;
+                height: 40px;
+            }
+            .xor-toggle-slider:before {
+                height: 30px;
+                width: 30px;
+                left: 5px;
+                bottom: 4px;
+            }
+            .xor-toggle-switch input:checked + .xor-toggle-slider:before {
+                transform: translateX(40px);
+            }
+        }
     </style>
 </head>
 <body>
@@ -949,6 +1026,15 @@
             <div class="key-input-wrapper">
                 <span class="key-label">🔑 密钥：</span>
                 <input type="text" id="keyInputImg" class="key-value" placeholder="可为空" value="">
+            </div>
+
+            <!-- XOR 二次加密开关 -->
+            <div class="xor-toggle-wrapper">
+                <span class="xor-toggle-label">🔐 色彩反转：</span>
+                <label class="xor-toggle-switch">
+                    <input type="checkbox" id="xorToggle">
+                    <span class="xor-toggle-slider"></span>
+                </label>
             </div>
         </div>
     </div>
@@ -1815,6 +1901,7 @@
         const resetBtn = document.getElementById('resetToOriginalBtn');
         const reencryptToggleBtn = document.getElementById('reencryptToggleBtn');
         const mirrorImg = document.getElementById('horizontalMirrorImage'); if (mirrorImg) mirrorImg.checked = true;
+        const xorToggle = document.getElementById('xorToggle');
 
         // 状态变量
         let selectedImageFiles = [];
@@ -1826,9 +1913,38 @@
         let latestKeyParams = null;
         let isProcessing = false;
         let isReencryptEnabled = false;
+        let isXOREnabled = false;
+        let xorAppliedForEncrypt = false;
+        let xorAppliedForDecrypt = false;
         let cachedFirstImageWidth = null, cachedFirstImageHeight = null, cachedFirstImageName = '';
         const mapCache = new Map();
         let encryptCount = 0;
+
+        // XOR 开关事件监听
+        xorToggle.addEventListener('change', function() {
+            isXOREnabled = this.checked;
+        });
+
+        // XOR 密钥计算函数
+        function getXORKeyFromPassword(password) {
+            if (!password) return 255;
+            let hash = 0;
+            for (let i = 0; i < password.length; i++) {
+                hash = ((hash << 5) - hash) + password.charCodeAt(i);
+                hash |= 0;
+            }
+            return Math.abs(hash) % 256;
+        }
+
+        // XOR 加密/解密函数
+        function applyXOR(data, key) {
+            for (let i = 0; i < data.length; i += 4) {
+                data[i] = data[i] ^ key;
+                data[i + 1] = data[i + 1] ^ key;
+                data[i + 2] = data[i + 2] ^ key;
+            }
+            return data;
+        }
 
         // 更新加密计数显示
         function updateEncryptCounter() {
@@ -1926,36 +2042,120 @@
         }
         function invertMap(map, len) { const inv = new Uint32Array(len); for (let i=0; i<len; i++) inv[map[i]] = i; return inv; }
 
-        async function processImage(file, mode, blockW, blockH) {
+        async function imageDataToBlob(imageData, width, height, format) {
+            if (!width || !height || width <= 0 || height <= 0) {
+                throw new Error('Invalid image dimensions: ' + width + 'x' + height);
+            }
+            const offCanvas = new OffscreenCanvas(width, height);
+            const offCtx = offCanvas.getContext('2d');
+            offCtx.putImageData(imageData, 0, 0);
+            let mime, quality;
+            if (format === 'webp') { mime = 'image/webp'; quality = 1.0; }
+            else if (format === 'jpg95') { mime = 'image/jpeg'; quality = 0.95; }
+            else { mime = 'image/png'; quality = undefined; }
+            return offCanvas.convertToBlob({ type: mime, quality: quality });
+        }
+
+        async function blobToImageData(blob) {
+            if (!blob || blob.size === 0) {
+                throw new Error('Invalid blob: empty or null');
+            }
+            const bitmap = await createImageBitmap(blob);
+            const w = bitmap.width, h = bitmap.height;
+            if (!w || !h || w <= 0 || h <= 0) {
+                bitmap.close();
+                throw new Error('Invalid bitmap dimensions: ' + w + 'x' + h);
+            }
+            const offCanvas = new OffscreenCanvas(w, h);
+            const offCtx = offCanvas.getContext('2d');
+            offCtx.drawImage(bitmap, 0, 0);
+            const imageData = offCtx.getImageData(0, 0, w, h);
+            bitmap.close();
+            return { imageData, width: w, height: h };
+        }
+
+        async function processImage(file, mode, blockW, blockH, shouldApplyXOR) {
             const bitmap = await createImageBitmap(file);
-            const width = bitmap.width, height = bitmap.height;
+            let width = bitmap.width, height = bitmap.height;
             const canvas = new OffscreenCanvas(width, height);
             const ctx = canvas.getContext('2d');
             ctx.drawImage(bitmap, 0, 0);
-            const imageData = ctx.getImageData(0, 0, width, height);
-            const data = imageData.data;
-            const totalPixels = width * height;
+            bitmap.close();
+            let imageData = ctx.getImageData(0, 0, width, height);
+            let data = imageData.data;
             const keyStr = keyInput.value || '';
-            let cacheKey = (imgMethod === 'gilbert') ? `gilbert:${width}:${height}:${keyStr}` : `block:${width}:${height}:${keyStr}:${blockW}:${blockH}`;
-            let encMap, invMap;
-            if (mapCache.has(cacheKey)) {
-                const pair = mapCache.get(cacheKey); encMap = pair.encMap; invMap = pair.invMap;
+            
+            if (mode === 'encrypt') {
+                if (shouldApplyXOR) {
+                    const xorKey = getXORKeyFromPassword(keyStr);
+                    applyXOR(data, xorKey);
+                    const webpBlob = await imageDataToBlob(imageData, width, height, 'webp');
+                    const result = await blobToImageData(webpBlob);
+                    imageData = result.imageData;
+                    data = imageData.data;
+                    width = result.width;
+                    height = result.height;
+                }
+                const totalPixels = width * height;
+                let cacheKey = (imgMethod === 'gilbert') ? `gilbert:${width}:${height}:${keyStr}` : `block:${width}:${height}:${keyStr}:${blockW}:${blockH}`;
+                let encMap;
+                if (mapCache.has(cacheKey)) {
+                    encMap = mapCache.get(cacheKey).encMap;
+                } else {
+                    if (imgMethod === 'gilbert') encMap = buildGilbertEncryptMap(width, height, keyStr);
+                    else encMap = buildBlockEncryptMap(width, height, blockW, blockH, keyStr);
+                    const invMap = invertMap(encMap, totalPixels);
+                    mapCache.set(cacheKey, { encMap, invMap });
+                }
+                const newData = new Uint8ClampedArray(data.length);
+                for (let dstIdx = 0; dstIdx < totalPixels; dstIdx++) {
+                    const srcIdx = encMap[dstIdx];
+                    newData[dstIdx*4] = data[srcIdx*4];
+                    newData[dstIdx*4+1] = data[srcIdx*4+1];
+                    newData[dstIdx*4+2] = data[srcIdx*4+2];
+                    newData[dstIdx*4+3] = data[srcIdx*4+3];
+                }
+                data = newData;
+                imageData = new ImageData(newData, width, height);
             } else {
-                if (imgMethod === 'gilbert') encMap = buildGilbertEncryptMap(width, height, keyStr);
-                else encMap = buildBlockEncryptMap(width, height, blockW, blockH, keyStr);
-                invMap = invertMap(encMap, totalPixels);
-                mapCache.set(cacheKey, { encMap, invMap });
+                const totalPixels = width * height;
+                let cacheKey = (imgMethod === 'gilbert') ? `gilbert:${width}:${height}:${keyStr}` : `block:${width}:${height}:${keyStr}:${blockW}:${blockH}`;
+                let invMap;
+                if (mapCache.has(cacheKey)) {
+                    invMap = mapCache.get(cacheKey).invMap;
+                } else {
+                    let encMap;
+                    if (imgMethod === 'gilbert') encMap = buildGilbertEncryptMap(width, height, keyStr);
+                    else encMap = buildBlockEncryptMap(width, height, blockW, blockH, keyStr);
+                    invMap = invertMap(encMap, totalPixels);
+                    mapCache.set(cacheKey, { encMap, invMap });
+                }
+                const newData = new Uint8ClampedArray(data.length);
+                for (let dstIdx = 0; dstIdx < totalPixels; dstIdx++) {
+                    const srcIdx = invMap[dstIdx];
+                    newData[dstIdx*4] = data[srcIdx*4];
+                    newData[dstIdx*4+1] = data[srcIdx*4+1];
+                    newData[dstIdx*4+2] = data[srcIdx*4+2];
+                    newData[dstIdx*4+3] = data[srcIdx*4+3];
+                }
+                data = newData;
+                imageData = new ImageData(newData, width, height);
+                
+                if (shouldApplyXOR) {
+                    const webpBlob = await imageDataToBlob(imageData, width, height, 'webp');
+                    const result = await blobToImageData(webpBlob);
+                    imageData = result.imageData;
+                    data = imageData.data;
+                    width = result.width;
+                    height = result.height;
+                    const xorKey = getXORKeyFromPassword(keyStr);
+                    applyXOR(data, xorKey);
+                }
             }
-            const map = (mode === 'encrypt') ? encMap : invMap;
-            const newData = new Uint8ClampedArray(data.length);
-            for (let dstIdx = 0; dstIdx < totalPixels; dstIdx++) {
-                const srcIdx = map[dstIdx];
-                newData[dstIdx*4] = data[srcIdx*4];
-                newData[dstIdx*4+1] = data[srcIdx*4+1];
-                newData[dstIdx*4+2] = data[srcIdx*4+2];
-                newData[dstIdx*4+3] = data[srcIdx*4+3];
-            }
-            ctx.putImageData(new ImageData(newData, width, height), 0, 0);
+            
+            canvas.width = width;
+            canvas.height = height;
+            ctx.putImageData(imageData, 0, 0);
             const format = imgFormatSelect.value;
             let mime, quality;
             if (format === 'jpg95') { mime = 'image/jpeg'; quality = 0.95; }
@@ -2032,8 +2232,9 @@
             downloadAllBtn.classList.remove('highlight');
             imageProgress.value = 0; selectedCountDisplay.value = `导入${selectedImageFiles.length}张图片`;
             enableExportControls();
-            // 重置加密计数
             encryptCount = 0;
+            xorAppliedForEncrypt = false;
+            xorAppliedForDecrypt = false;
             updateEncryptCounter();
             if (previewModal.style.display === 'flex' && previewUrls.length) { previewImg.src = previewUrls[0]; previewCounter.innerText = `1 / ${previewUrls.length}`; }
         }
@@ -2043,7 +2244,6 @@
             isProcessing = true; disableExportControls();
             try {
                 imageProgress.value = 0; downloadAllBtn.classList.remove('highlight');
-                // 设置初始状态：解密/加密中
                 selectedCountDisplay.value = mode === 'encrypt' ? '加密中' : '解密中';
                 let currentBlockW = imgBlockW, currentBlockH = imgBlockH;
                 if (imgMethod === 'block' && selectedImageFiles.length > 1) { currentBlockW = 1; currentBlockH = 1; }
@@ -2052,23 +2252,26 @@
                     currentBlockW = (isNaN(wVal)||wVal<1) ? 1 : wVal; currentBlockH = (isNaN(hVal)||hVal<1) ? 1 : hVal;
                 }
                 const total = selectedImageFiles.length; const results = new Array(total); let completed = 0;
-                // 保存当前的处理结果，用于叠加加密
                 const previousProcessedImages = [...latestProcessedImages];
+                
+                let shouldApplyXOR = false;
+                if (mode === 'encrypt') {
+                    shouldApplyXOR = isXOREnabled && !xorAppliedForEncrypt;
+                } else {
+                    shouldApplyXOR = isXOREnabled && !xorAppliedForDecrypt;
+                }
+                
                 const promises = selectedImageFiles.map(async (file, idx) => {
                     let inputFile = file;
-                    // 对于加密和解密操作，都使用上一次处理的结果作为输入（叠加处理）
                     if (previousProcessedImages.length > 0 && idx < previousProcessedImages.length) {
-                        // 从previousProcessedImages中获取上一次处理的结果
                         const prevResult = previousProcessedImages[idx];
                         if (prevResult) {
-                            // 将blob转换为File对象
                             inputFile = new File([prevResult.blob], prevResult.name, { type: prevResult.blob.type });
                         }
                     }
-                    return processImage(inputFile, mode, currentBlockW, currentBlockH).then(({blob, name}) => { 
+                    return processImage(inputFile, mode, currentBlockW, currentBlockH, shouldApplyXOR).then(({blob, name}) => { 
                         results[idx] = { blob, name }; 
                         completed++;
-                        // 更新状态为完成了x张图片
                         selectedCountDisplay.value = `完成${completed}张图片`;
                         imageProgress.value = Math.round((completed/total)*100); 
                     });
@@ -2088,7 +2291,16 @@
                     encryptCount--;
                 }
                 updateEncryptCounter();
-                latestKeyParams = { key: keyInput.value, method: imgMethod, blockW: currentBlockW, blockH: currentBlockH, format: imgFormatSelect.value, count: encryptCount };
+                if (shouldApplyXOR) {
+                    if (mode === 'encrypt') {
+                        xorAppliedForEncrypt = true;
+                        xorAppliedForDecrypt = false;
+                    } else {
+                        xorAppliedForDecrypt = true;
+                        xorAppliedForEncrypt = false;
+                    }
+                }
+                latestKeyParams = { key: keyInput.value, method: imgMethod, blockW: currentBlockW, blockH: currentBlockH, format: imgFormatSelect.value, count: encryptCount, xorEnabled: isXOREnabled, xorKey: isXOREnabled ? getXORKeyFromPassword(keyInput.value) : null };
                 if (isReencryptEnabled) {
                     enableExportControls();
                 }
@@ -2106,6 +2318,7 @@
                     const p = latestKeyParams;
                     let keyText = `# 加密参数\n密钥: ${p.key}\n方式: ${p.method === 'gilbert' ? '吉尔伯特曲线' : '分块打乱'}\n`;
                     if (p.method === 'block') { keyText += `块宽: ${p.blockW}\n块高: ${p.blockH}\n`; }
+                    keyText += `XOR二次加密: ${p.xorEnabled ? '开启 (密钥: ' + p.xorKey + ')' : '关闭'}\n`;
                     keyText += `导出格式: ${p.format}\n处理次数: ${p.count}\n`;
                     zip.file('key_and_params.txt', keyText);
                 }
@@ -2116,6 +2329,7 @@
                     const p = latestKeyParams;
                     let keyText = `密钥: ${p.key}\n方式: ${p.method === 'gilbert' ? '吉尔伯特曲线' : '分块打乱'}\n`;
                     if (p.method === 'block') { keyText += `块宽: ${p.blockW}\n块高: ${p.blockH}\n`; }
+                    keyText += `XOR二次加密: ${p.xorEnabled ? '开启 (密钥: ' + p.xorKey + ')' : '关闭'}\n`;
                     keyText += `导出格式: ${p.format}\n处理次数: ${p.count}`;
                     saveAs(new Blob([keyText], { type: 'text/plain;charset=utf-8' }), 'key_params.txt');
                 }
@@ -2134,6 +2348,7 @@
                     const p = latestKeyParams;
                     let keyText = `密钥: ${p.key}\n方式: ${p.method === 'gilbert' ? '吉尔伯特曲线' : '分块打乱'}\n`;
                     if (p.method === 'block') { keyText += `块宽: ${p.blockW}\n块高: ${p.blockH}\n`; }
+                    keyText += `XOR二次加密: ${p.xorEnabled ? '开启 (密钥: ' + p.xorKey + ')' : '关闭'}\n`;
                     keyText += `导出格式: ${p.format}\n处理次数: ${p.count}`;
                     const keyBlob = new Blob([keyText], { type: 'text/plain;charset=utf-8' });
                     const keyHandle = await dirHandle.getFileHandle('key_params.txt', { create: true });
@@ -2177,6 +2392,13 @@
         exportConfigBtn.addEventListener('click', exportToFolder);
         resetBtn.addEventListener('click', resetToOriginal);
         
+        imgFormatSelect.addEventListener('change', function() {
+            document.getElementById('batchFormat').value = this.value;
+        });
+        document.getElementById('batchFormat').addEventListener('change', function() {
+            imgFormatSelect.value = this.value;
+        });
+        
         // 批量处理功能
         const batchProcessModal = document.getElementById('batchProcessModal');
         const encryptCounterEl = document.getElementById('encryptCounter');
@@ -2201,14 +2423,24 @@
             if (isNaN(count) || count < 1) { alert('请输入有效次数'); return; }
             
             const originalFormat = imgFormatSelect.value;
+            const originalXORState = isXOREnabled;
             batchProcessModal.style.display = 'none';
             
+            xorAppliedForEncrypt = false;
+            xorAppliedForDecrypt = false;
+            
             for (let i = 0; i < count; i++) {
+                if (i === 0) {
+                    isXOREnabled = true;
+                } else {
+                    isXOREnabled = false;
+                }
                 imgFormatSelect.value = (i < count - 1) ? 'webp' : format;
                 await handleImages(mode);
             }
             
             imgFormatSelect.value = originalFormat;
+            isXOREnabled = originalXORState;
         }
         
         document.getElementById('executeBatchBtn').addEventListener('click', executeBatchProcess);
