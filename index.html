@@ -1923,11 +1923,15 @@
         // XOR 开关事件监听
         xorToggle.addEventListener('change', function() {
             isXOREnabled = this.checked;
+            // 当XOR开关状态改变时，重置XOR应用标志
+            xorAppliedForEncrypt = false;
+            xorAppliedForDecrypt = false;
+            console.log(`XOR开关: ${isXOREnabled ? '开启' : '关闭'}, 重置应用标志`);
         });
 
         // XOR 密钥计算函数
         function getXORKeyFromPassword(password) {
-            if (!password) return 255;
+            if (!password || password.trim() === '') return 0; // 空密钥时返回0，避免颜色异常
             let hash = 0;
             for (let i = 0; i < password.length; i++) {
                 hash = ((hash << 5) - hash) + password.charCodeAt(i);
@@ -1938,10 +1942,16 @@
 
         // XOR 加密/解密函数
         function applyXOR(data, key) {
+            // 如果密钥为0，不需要任何操作
+            if (key === 0) return data;
+
             for (let i = 0; i < data.length; i += 4) {
-                data[i] = data[i] ^ key;
-                data[i + 1] = data[i + 1] ^ key;
-                data[i + 2] = data[i + 2] ^ key;
+                // 只对RGB通道进行XOR操作，保持Alpha通道不变
+                // 使用按位与0xFF确保结果在0-255范围内
+                data[i] = (data[i] ^ key) & 0xFF;
+                data[i + 1] = (data[i + 1] ^ key) & 0xFF;
+                data[i + 2] = (data[i + 2] ^ key) & 0xFF;
+                // Alpha通道保持不变
             }
             return data;
         }
@@ -2088,6 +2098,7 @@
             if (mode === 'encrypt') {
                 if (shouldApplyXOR) {
                     const xorKey = getXORKeyFromPassword(keyStr);
+                    console.log(`加密: 应用XOR, 密钥=${xorKey}, 原始密钥="${keyStr}"`);
                     applyXOR(data, xorKey);
                 }
                 const totalPixels = width * height;
@@ -2137,6 +2148,7 @@
                 
                 if (shouldApplyXOR) {
                     const xorKey = getXORKeyFromPassword(keyStr);
+                    console.log(`解密: 应用XOR, 密钥=${xorKey}, 原始密钥="${keyStr}"`);
                     applyXOR(data, xorKey);
                 }
             }
