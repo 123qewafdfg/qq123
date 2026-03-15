@@ -1931,7 +1931,7 @@
 
         // XOR 密钥计算函数
         function getXORKeyFromPassword(password) {
-            if (!password || password.trim() === '') return 0; // 空密钥时返回0，避免颜色异常
+            if (!password || password.trim() === '') return 127; // 空密钥时返回127（中间值），避免极端颜色变化
             let hash = 0;
             for (let i = 0; i < password.length; i++) {
                 hash = ((hash << 5) - hash) + password.charCodeAt(i);
@@ -1942,9 +1942,6 @@
 
         // XOR 加密/解密函数
         function applyXOR(data, key) {
-            // 如果密钥为0，不需要任何操作
-            if (key === 0) return data;
-
             for (let i = 0; i < data.length; i += 4) {
                 // 只对RGB通道进行XOR操作，保持Alpha通道不变
                 // 使用按位与0xFF确保结果在0-255范围内
@@ -2098,8 +2095,15 @@
             if (mode === 'encrypt') {
                 if (shouldApplyXOR) {
                     const xorKey = getXORKeyFromPassword(keyStr);
-                    console.log(`加密: 应用XOR, 密钥=${xorKey}, 原始密钥="${keyStr}"`);
+                    console.log(`加密: 应用XOR, 密钥=${xorKey}, 原始密钥="${keyStr}", 数据长度=${data.length}`);
+                    // 记录前几个像素的原始值用于调试
+                    if (data.length >= 12) {
+                        console.log(`加密前像素示例: R=${data[0]}, G=${data[1]}, B=${data[2]}, A=${data[3]}`);
+                    }
                     applyXOR(data, xorKey);
+                    if (data.length >= 12) {
+                        console.log(`加密后像素示例: R=${data[0]}, G=${data[1]}, B=${data[2]}, A=${data[3]}`);
+                    }
                 }
                 const totalPixels = width * height;
                 let cacheKey = (imgMethod === 'gilbert') ? `gilbert:${width}:${height}:${keyStr}` : `block:${width}:${height}:${keyStr}:${blockW}:${blockH}`;
@@ -2148,8 +2152,15 @@
                 
                 if (shouldApplyXOR) {
                     const xorKey = getXORKeyFromPassword(keyStr);
-                    console.log(`解密: 应用XOR, 密钥=${xorKey}, 原始密钥="${keyStr}"`);
+                    console.log(`解密: 应用XOR, 密钥=${xorKey}, 原始密钥="${keyStr}", 数据长度=${data.length}`);
+                    // 记录前几个像素的原始值用于调试
+                    if (data.length >= 12) {
+                        console.log(`解密前像素示例: R=${data[0]}, G=${data[1]}, B=${data[2]}, A=${data[3]}`);
+                    }
                     applyXOR(data, xorKey);
+                    if (data.length >= 12) {
+                        console.log(`解密后像素示例: R=${data[0]}, G=${data[1]}, B=${data[2]}, A=${data[3]}`);
+                    }
                 }
             }
             
