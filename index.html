@@ -2089,12 +2089,6 @@
                 if (shouldApplyXOR) {
                     const xorKey = getXORKeyFromPassword(keyStr);
                     applyXOR(data, xorKey);
-                    const webpBlob = await imageDataToBlob(imageData, width, height, 'webp');
-                    const result = await blobToImageData(webpBlob);
-                    imageData = result.imageData;
-                    data = imageData.data;
-                    width = result.width;
-                    height = result.height;
                 }
                 const totalPixels = width * height;
                 let cacheKey = (imgMethod === 'gilbert') ? `gilbert:${width}:${height}:${keyStr}` : `block:${width}:${height}:${keyStr}:${blockW}:${blockH}`;
@@ -2142,12 +2136,6 @@
                 imageData = new ImageData(newData, width, height);
                 
                 if (shouldApplyXOR) {
-                    const webpBlob = await imageDataToBlob(imageData, width, height, 'webp');
-                    const result = await blobToImageData(webpBlob);
-                    imageData = result.imageData;
-                    data = imageData.data;
-                    width = result.width;
-                    height = result.height;
                     const xorKey = getXORKeyFromPassword(keyStr);
                     applyXOR(data, xorKey);
                 }
