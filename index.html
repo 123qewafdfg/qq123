@@ -904,6 +904,19 @@
         .xor-toggle-switch input:checked + .xor-toggle-slider:before {
             transform: translateX(28px);
         }
+        .xor-toggle-switch input:disabled + .xor-toggle-slider {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background-color: #4a3d38;
+            border-color: #725e56;
+        }
+        .image-compat-note {
+            display: none;
+            color: #ffbe9a;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            padding-top: 4px;
+        }
 
         @media screen and (min-width: 769px) {
             .xor-toggle-wrapper {
@@ -924,6 +937,9 @@
             }
             .xor-toggle-switch input:checked + .xor-toggle-slider:before {
                 transform: translateX(40px);
+            }
+            .image-compat-note {
+                font-size: 1.05rem;
             }
         }
     </style>
@@ -1036,6 +1052,7 @@
                     <span class="xor-toggle-slider"></span>
                 </label>
             </div>
+            <div id="imageCompatNote" class="image-compat-note" aria-live="polite"></div>
         </div>
     </div>
 
@@ -1896,12 +1913,14 @@
         const packCheck = document.getElementById('packDownload');
         const exportKeyCheck = document.getElementById('exportKeyFileCheckbox');
         const imgFormatSelect = document.getElementById('imgFormat');
+        const batchFormatSelect = document.getElementById('batchFormat');
         const imageProgress = document.getElementById('imageProgress');
         const selectedCountDisplay = document.getElementById('selectedCountDisplay');
         const resetBtn = document.getElementById('resetToOriginalBtn');
         const reencryptToggleBtn = document.getElementById('reencryptToggleBtn');
         const mirrorImg = document.getElementById('horizontalMirrorImage'); if (mirrorImg) mirrorImg.checked = true;
         const xorToggle = document.getElementById('xorToggle');
+        const imageCompatNote = document.getElementById('imageCompatNote');
 
         // 状态变量
         let selectedImageFiles = [];
@@ -1913,27 +1932,37 @@
         let latestKeyParams = null;
         let isProcessing = false;
         let isReencryptEnabled = false;
-        let isXOREnabled = false;
+        const XOR_FIXED_KEY = 255;
+        const XOR_ENABLED_STORAGE_KEY = 'imageColorInvertEnabled';
+        let isXOREnabled = localStorage.getItem(XOR_ENABLED_STORAGE_KEY) === '1';
         let xorAppliedForEncrypt = false;
         let xorAppliedForDecrypt = false;
         let cachedFirstImageWidth = null, cachedFirstImageHeight = null, cachedFirstImageName = '';
         const mapCache = new Map();
         let encryptCount = 0;
+        let xorCompatibilityReady = Promise.resolve();
+        const imageRuntime = {
+            hasOffscreenCanvas: typeof OffscreenCanvas === 'function' && typeof OffscreenCanvas.prototype.convertToBlob === 'function',
+            hasCreateImageBitmap: typeof createImageBitmap === 'function',
+            webpTranscodeSupported: null
+        };
+        xorToggle.checked = isXOREnabled;
 
         // XOR 开关事件监听
         xorToggle.addEventListener('change', function() {
+            if (this.disabled) {
+                this.checked = false;
+                isXOREnabled = false;
+                localStorage.setItem(XOR_ENABLED_STORAGE_KEY, '0');
+                return;
+            }
             isXOREnabled = this.checked;
+            localStorage.setItem(XOR_ENABLED_STORAGE_KEY, isXOREnabled ? '1' : '0');
         });
 
         // XOR 密钥计算函数
-        function getXORKeyFromPassword(password) {
-            if (!password) return 255;
-            let hash = 0;
-            for (let i = 0; i < password.length; i++) {
-                hash = ((hash << 5) - hash) + password.charCodeAt(i);
-                hash |= 0;
-            }
-            return Math.abs(hash) % 256;
+        function getFixedXORKey(password) {
+            return XOR_FIXED_KEY;
         }
 
         // XOR 加密/解密函数
@@ -1952,6 +1981,175 @@
             if (counter) {
                 counter.textContent = encryptCount;
             }
+        }
+
+        function refreshImageCompatNote() {
+            if (!imageCompatNote) return;
+            const messages = [];
+            if (!imageRuntime.hasOffscreenCanvas || !imageRuntime.hasCreateImageBitmap) {
+                messages.push('当前浏览器已启用兼容模式处理图片。');
+            }
+            if (imageRuntime.webpTranscodeSupported === false) {
+                messages.push('色彩反转和 WEBP 导出已关闭，其它加密/解密仍可正常使用。');
+            }
+            imageCompatNote.textContent = messages.join(' ');
+            imageCompatNote.style.display = messages.length ? 'block' : 'none';
+        }
+
+        function getImageExportOptions(format) {
+            if (format === 'jpg95') return { type: 'image/jpeg', quality: 0.95 };
+            if (format === 'webp') return { type: 'image/webp', quality: 1.0 };
+            return { type: 'image/png', quality: undefined };
+        }
+
+        function createCanvasSurface(width, height) {
+            if (!width || !height || width <= 0 || height <= 0) {
+                throw new Error('Invalid image dimensions: ' + width + 'x' + height);
+            }
+            const canvas = imageRuntime.hasOffscreenCanvas ? new OffscreenCanvas(width, height) : document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (!ctx) {
+                throw new Error('2D canvas is not supported in this browser');
+            }
+            return { canvas, ctx };
+        }
+
+        function dataUrlToBlob(dataUrl) {
+            const parts = dataUrl.split(',');
+            if (parts.length < 2) {
+                throw new Error('Canvas export failed');
+            }
+            const mimeMatch = parts[0].match(/data:([^;]+)(;base64)?/i);
+            const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+            const binary = atob(parts[1]);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return new Blob([bytes], { type: mime });
+        }
+
+        async function canvasToBlobCompat(canvas, options) {
+            const type = options && options.type ? options.type : 'image/png';
+            const quality = options ? options.quality : undefined;
+            if (typeof canvas.convertToBlob === 'function') {
+                return canvas.convertToBlob({ type, quality });
+            }
+            if (typeof canvas.toBlob === 'function') {
+                return new Promise((resolve, reject) => {
+                    canvas.toBlob((blob) => {
+                        if (blob) resolve(blob);
+                        else reject(new Error('Canvas export failed'));
+                    }, type, quality);
+                });
+            }
+            if (typeof canvas.toDataURL === 'function') {
+                return dataUrlToBlob(canvas.toDataURL(type, quality));
+            }
+            throw new Error('Canvas export is not supported in this browser');
+        }
+
+        async function loadImageSource(fileOrBlob) {
+            if (imageRuntime.hasCreateImageBitmap) {
+                try {
+                    const bitmap = await createImageBitmap(fileOrBlob);
+                    return {
+                        source: bitmap,
+                        width: bitmap.width,
+                        height: bitmap.height,
+                        cleanup() {
+                            if (typeof bitmap.close === 'function') bitmap.close();
+                        }
+                    };
+                } catch (error) {
+                    console.warn('createImageBitmap failed, falling back to Image', error);
+                }
+            }
+            const url = URL.createObjectURL(fileOrBlob);
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.decoding = 'async';
+                img.onload = () => {
+                    resolve({
+                        source: img,
+                        width: img.naturalWidth || img.width,
+                        height: img.naturalHeight || img.height,
+                        cleanup() {
+                            URL.revokeObjectURL(url);
+                        }
+                    });
+                };
+                img.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    reject(new Error('Unable to decode image'));
+                };
+                img.src = url;
+            });
+        }
+
+        function createFileLike(blob, name) {
+            if (typeof File === 'function') {
+                return new File([blob], name, { type: blob.type });
+            }
+            const fileLike = blob.slice(0, blob.size, blob.type);
+            fileLike.name = name;
+            return fileLike;
+        }
+
+        function updateWebpAvailability(isSupported) {
+            imageRuntime.webpTranscodeSupported = isSupported;
+            xorToggle.disabled = !isSupported;
+            if (!isSupported) {
+                xorToggle.checked = false;
+                isXOREnabled = false;
+                localStorage.setItem(XOR_ENABLED_STORAGE_KEY, '0');
+            }
+            const webpOption = imgFormatSelect.querySelector('option[value="webp"]');
+            if (webpOption) {
+                webpOption.disabled = !isSupported;
+            }
+            if (!isSupported && imgFormatSelect.value === 'webp') {
+                imgFormatSelect.value = 'png';
+            }
+            if (batchFormatSelect) {
+                const batchWebpOption = batchFormatSelect.querySelector('option[value="webp"]');
+                if (batchWebpOption) {
+                    batchWebpOption.disabled = !isSupported;
+                }
+                if (!isSupported && batchFormatSelect.value === 'webp') {
+                    batchFormatSelect.value = 'png';
+                }
+            }
+            refreshImageCompatNote();
+        }
+
+        async function testWebpTranscodeSupport() {
+            try {
+                const surface = createCanvasSurface(2, 2);
+                surface.ctx.fillStyle = '#000';
+                surface.ctx.fillRect(0, 0, 2, 2);
+                const blob = await canvasToBlobCompat(surface.canvas, { type: 'image/webp', quality: 1.0 });
+                if (!blob || blob.size === 0 || !/^image\/webp$/i.test(blob.type || '')) {
+                    return false;
+                }
+                const decoded = await loadImageSource(blob);
+                try {
+                    return decoded.width > 0 && decoded.height > 0;
+                } finally {
+                    decoded.cleanup();
+                }
+            } catch (error) {
+                console.warn('WEBP transcode is not supported', error);
+                return false;
+            }
+        }
+
+        async function applyImageCompatibility() {
+            refreshImageCompatNote();
+            const webpSupported = await testWebpTranscodeSupport();
+            updateWebpAvailability(webpSupported);
         }
 
         // 重加密功能切换
@@ -2043,51 +2241,48 @@
         function invertMap(map, len) { const inv = new Uint32Array(len); for (let i=0; i<len; i++) inv[map[i]] = i; return inv; }
 
         async function imageDataToBlob(imageData, width, height, format) {
-            if (!width || !height || width <= 0 || height <= 0) {
-                throw new Error('Invalid image dimensions: ' + width + 'x' + height);
-            }
-            const offCanvas = new OffscreenCanvas(width, height);
-            const offCtx = offCanvas.getContext('2d');
-            offCtx.putImageData(imageData, 0, 0);
-            let mime, quality;
-            if (format === 'webp') { mime = 'image/webp'; quality = 1.0; }
-            else if (format === 'jpg95') { mime = 'image/jpeg'; quality = 0.95; }
-            else { mime = 'image/png'; quality = undefined; }
-            return offCanvas.convertToBlob({ type: mime, quality: quality });
+            const surface = createCanvasSurface(width, height);
+            surface.ctx.putImageData(imageData, 0, 0);
+            return canvasToBlobCompat(surface.canvas, getImageExportOptions(format));
         }
 
         async function blobToImageData(blob) {
             if (!blob || blob.size === 0) {
                 throw new Error('Invalid blob: empty or null');
             }
-            const bitmap = await createImageBitmap(blob);
-            const w = bitmap.width, h = bitmap.height;
-            if (!w || !h || w <= 0 || h <= 0) {
-                bitmap.close();
-                throw new Error('Invalid bitmap dimensions: ' + w + 'x' + h);
+            const imageSource = await loadImageSource(blob);
+            try {
+                const w = imageSource.width, h = imageSource.height;
+                if (!w || !h || w <= 0 || h <= 0) {
+                    throw new Error('Invalid bitmap dimensions: ' + w + 'x' + h);
+                }
+                const surface = createCanvasSurface(w, h);
+                surface.ctx.drawImage(imageSource.source, 0, 0);
+                const imageData = surface.ctx.getImageData(0, 0, w, h);
+                return { imageData, width: w, height: h };
+            } finally {
+                imageSource.cleanup();
             }
-            const offCanvas = new OffscreenCanvas(w, h);
-            const offCtx = offCanvas.getContext('2d');
-            offCtx.drawImage(bitmap, 0, 0);
-            const imageData = offCtx.getImageData(0, 0, w, h);
-            bitmap.close();
-            return { imageData, width: w, height: h };
         }
 
         async function processImage(file, mode, blockW, blockH, shouldApplyXOR) {
-            const bitmap = await createImageBitmap(file);
-            let width = bitmap.width, height = bitmap.height;
-            const canvas = new OffscreenCanvas(width, height);
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(bitmap, 0, 0);
-            bitmap.close();
+            const imageSource = await loadImageSource(file);
+            let width = imageSource.width, height = imageSource.height;
+            const surface = createCanvasSurface(width, height);
+            const canvas = surface.canvas;
+            const ctx = surface.ctx;
+            try {
+                ctx.drawImage(imageSource.source, 0, 0);
+            } finally {
+                imageSource.cleanup();
+            }
             let imageData = ctx.getImageData(0, 0, width, height);
             let data = imageData.data;
             const keyStr = keyInput.value || '';
             
             if (mode === 'encrypt') {
                 if (shouldApplyXOR) {
-                    const xorKey = getXORKeyFromPassword(keyStr);
+                    const xorKey = getFixedXORKey(keyStr);
                     applyXOR(data, xorKey);
                     const webpBlob = await imageDataToBlob(imageData, width, height, 'webp');
                     const result = await blobToImageData(webpBlob);
@@ -2148,7 +2343,7 @@
                     data = imageData.data;
                     width = result.width;
                     height = result.height;
-                    const xorKey = getXORKeyFromPassword(keyStr);
+                    const xorKey = getFixedXORKey(keyStr);
                     applyXOR(data, xorKey);
                 }
             }
@@ -2156,14 +2351,12 @@
             canvas.width = width;
             canvas.height = height;
             ctx.putImageData(imageData, 0, 0);
-            const format = imgFormatSelect.value;
-            let mime, quality;
-            if (format === 'jpg95') { mime = 'image/jpeg'; quality = 0.95; }
-            else if (format === 'png') { mime = 'image/png'; quality = undefined; }
-            else { mime = 'image/webp'; quality = 1.0; }
-            const blob = await canvas.convertToBlob({ type: mime, quality: quality });
-            const ext = mime.split('/')[1];
-            let baseName = file.name.replace(/\.[^/.]+$/, '');
+            const exportOptions = getImageExportOptions(imgFormatSelect.value);
+            const blob = await canvasToBlobCompat(canvas, exportOptions);
+            const actualMime = blob.type || exportOptions.type;
+            const ext = actualMime.split('/')[1];
+            const inputName = file.name || 'image';
+            let baseName = inputName.replace(/\.[^/.]+$/, '');
             baseName = baseName.replace(/_encrypted$|_decrypted$/g, '');
             const suffix = (mode==='encrypt'?'_encrypted':'_decrypted');
             return { blob, name: `${baseName}${suffix}.${ext}` };
@@ -2173,9 +2366,9 @@
             if (selectedImageFiles.length === 0) { cachedFirstImageWidth = cachedFirstImageHeight = null; cachedFirstImageName = ''; return; }
             try {
                 const file = selectedImageFiles[0];
-                const bitmap = await createImageBitmap(file);
-                cachedFirstImageWidth = bitmap.width; cachedFirstImageHeight = bitmap.height; cachedFirstImageName = file.name;
-                bitmap.close();
+                const imageSource = await loadImageSource(file);
+                cachedFirstImageWidth = imageSource.width; cachedFirstImageHeight = imageSource.height; cachedFirstImageName = file.name;
+                imageSource.cleanup();
             } catch (e) { console.warn(e); cachedFirstImageWidth = cachedFirstImageHeight = null; cachedFirstImageName = ''; }
         }
 
@@ -2223,6 +2416,8 @@
         function disableExportControls() { imgFormatSelect.disabled = true; startEncrypt.disabled = true; startDecrypt.disabled = true; }
         function enableExportControls() { imgFormatSelect.disabled = false; startEncrypt.disabled = false; startDecrypt.disabled = false; }
 
+        xorCompatibilityReady = applyImageCompatibility();
+
         function resetToOriginal() {
             if (isProcessing) { alert('请等待当前处理完成'); return; }
             if (!selectedImageFiles.length) { alert('没有已选择的图片'); return; }
@@ -2243,6 +2438,7 @@
             if (isProcessing) return; if (!selectedImageFiles.length) { alert('请先选择图片文件'); return; }
             isProcessing = true; disableExportControls();
             try {
+                await xorCompatibilityReady;
                 imageProgress.value = 0; downloadAllBtn.classList.remove('highlight');
                 selectedCountDisplay.value = mode === 'encrypt' ? '加密中' : '解密中';
                 let currentBlockW = imgBlockW, currentBlockH = imgBlockH;
@@ -2260,13 +2456,16 @@
                 } else {
                     shouldApplyXOR = isXOREnabled && !xorAppliedForDecrypt;
                 }
+                if (shouldApplyXOR && imageRuntime.webpTranscodeSupported === false) {
+                    shouldApplyXOR = false;
+                }
                 
                 const promises = selectedImageFiles.map(async (file, idx) => {
                     let inputFile = file;
                     if (previousProcessedImages.length > 0 && idx < previousProcessedImages.length) {
                         const prevResult = previousProcessedImages[idx];
                         if (prevResult) {
-                            inputFile = new File([prevResult.blob], prevResult.name, { type: prevResult.blob.type });
+                            inputFile = createFileLike(prevResult.blob, prevResult.name);
                         }
                     }
                     return processImage(inputFile, mode, currentBlockW, currentBlockH, shouldApplyXOR).then(({blob, name}) => { 
@@ -2300,7 +2499,7 @@
                         xorAppliedForEncrypt = false;
                     }
                 }
-                latestKeyParams = { key: keyInput.value, method: imgMethod, blockW: currentBlockW, blockH: currentBlockH, format: imgFormatSelect.value, count: encryptCount, xorEnabled: isXOREnabled, xorKey: isXOREnabled ? getXORKeyFromPassword(keyInput.value) : null };
+                latestKeyParams = { key: keyInput.value, method: imgMethod, blockW: currentBlockW, blockH: currentBlockH, format: imgFormatSelect.value, count: encryptCount, xorEnabled: isXOREnabled, xorKey: isXOREnabled ? XOR_FIXED_KEY : null };
                 if (isReencryptEnabled) {
                     enableExportControls();
                 }
@@ -2393,9 +2592,9 @@
         resetBtn.addEventListener('click', resetToOriginal);
         
         imgFormatSelect.addEventListener('change', function() {
-            document.getElementById('batchFormat').value = this.value;
+            if (batchFormatSelect) batchFormatSelect.value = this.value;
         });
-        document.getElementById('batchFormat').addEventListener('change', function() {
+        batchFormatSelect.addEventListener('change', function() {
             imgFormatSelect.value = this.value;
         });
         
@@ -2415,15 +2614,17 @@
         encryptCounterEl.addEventListener('touchend', () => clearTimeout(longPressTimer));
         
         async function executeBatchProcess() {
+            await xorCompatibilityReady;
             const mode = document.querySelector('input[name="batchMode"]:checked').value;
             const count = parseInt(document.getElementById('batchCount').value, 10);
-            const format = document.getElementById('batchFormat').value;
+            const format = batchFormatSelect.value;
             
             if (!selectedImageFiles.length) { alert('请先选择图片'); return; }
             if (isNaN(count) || count < 1) { alert('请输入有效次数'); return; }
             
             const originalFormat = imgFormatSelect.value;
             const originalXORState = isXOREnabled;
+            const intermediateFormat = imageRuntime.webpTranscodeSupported ? 'webp' : 'png';
             batchProcessModal.style.display = 'none';
             
             xorAppliedForEncrypt = false;
@@ -2431,16 +2632,18 @@
             
             for (let i = 0; i < count; i++) {
                 if (i === 0) {
-                    isXOREnabled = true;
+                    isXOREnabled = imageRuntime.webpTranscodeSupported === true;
                 } else {
                     isXOREnabled = false;
                 }
-                imgFormatSelect.value = (i < count - 1) ? 'webp' : format;
+                xorToggle.checked = isXOREnabled;
+                imgFormatSelect.value = (i < count - 1) ? intermediateFormat : format;
                 await handleImages(mode);
             }
             
             imgFormatSelect.value = originalFormat;
             isXOREnabled = originalXORState;
+            xorToggle.checked = originalXORState;
         }
         
         document.getElementById('executeBatchBtn').addEventListener('click', executeBatchProcess);
