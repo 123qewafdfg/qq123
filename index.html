@@ -2452,11 +2452,12 @@
                 const previousProcessedImages = [...latestProcessedImages];
                 
                 const effectiveXOREnabled = batchXORStateOverride === null ? isXOREnabled : batchXORStateOverride;
+                const allowRepeatXOR = isReencryptEnabled && batchXORStateOverride === null;
                 let shouldApplyXOR = false;
                 if (mode === 'encrypt') {
-                    shouldApplyXOR = effectiveXOREnabled && !xorAppliedForEncrypt;
+                    shouldApplyXOR = effectiveXOREnabled && (allowRepeatXOR || !xorAppliedForEncrypt);
                 } else {
-                    shouldApplyXOR = effectiveXOREnabled && !xorAppliedForDecrypt;
+                    shouldApplyXOR = effectiveXOREnabled && (allowRepeatXOR || !xorAppliedForDecrypt);
                 }
                 if (shouldApplyXOR && imageRuntime.webpTranscodeSupported === false) {
                     shouldApplyXOR = false;
