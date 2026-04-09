@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=2.0">
     <title>小番茄 · 视频+图片合并版</title>
     <!-- JSZip & FileSaver (用于图片打包) -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://github.com/123qewafdfg/qq123"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
     <style>
         /* ========== 合并样式：基础来自2.html，补充视频细节 ========== */
@@ -1941,6 +1941,7 @@
         const mapCache = new Map();
         let encryptCount = 0;
         let xorCompatibilityReady = Promise.resolve();
+        let batchXORStateOverride = null;
         const imageRuntime = {
             hasOffscreenCanvas: typeof OffscreenCanvas === 'function' && typeof OffscreenCanvas.prototype.convertToBlob === 'function',
             hasCreateImageBitmap: typeof createImageBitmap === 'function',
@@ -2450,11 +2451,12 @@
                 const total = selectedImageFiles.length; const results = new Array(total); let completed = 0;
                 const previousProcessedImages = [...latestProcessedImages];
                 
+                const effectiveXOREnabled = batchXORStateOverride === null ? isXOREnabled : batchXORStateOverride;
                 let shouldApplyXOR = false;
                 if (mode === 'encrypt') {
-                    shouldApplyXOR = isXOREnabled && !xorAppliedForEncrypt;
+                    shouldApplyXOR = effectiveXOREnabled && !xorAppliedForEncrypt;
                 } else {
-                    shouldApplyXOR = isXOREnabled && !xorAppliedForDecrypt;
+                    shouldApplyXOR = effectiveXOREnabled && !xorAppliedForDecrypt;
                 }
                 if (shouldApplyXOR && imageRuntime.webpTranscodeSupported === false) {
                     shouldApplyXOR = false;
@@ -2499,7 +2501,7 @@
                         xorAppliedForEncrypt = false;
                     }
                 }
-                latestKeyParams = { key: keyInput.value, method: imgMethod, blockW: currentBlockW, blockH: currentBlockH, format: imgFormatSelect.value, count: encryptCount, xorEnabled: isXOREnabled, xorKey: isXOREnabled ? XOR_FIXED_KEY : null };
+                latestKeyParams = { key: keyInput.value, method: imgMethod, blockW: currentBlockW, blockH: currentBlockH, format: imgFormatSelect.value, count: encryptCount, xorEnabled: effectiveXOREnabled, xorKey: effectiveXOREnabled ? XOR_FIXED_KEY : null };
                 if (isReencryptEnabled) {
                     enableExportControls();
                 }
@@ -2623,27 +2625,22 @@
             if (isNaN(count) || count < 1) { alert('请输入有效次数'); return; }
             
             const originalFormat = imgFormatSelect.value;
-            const originalXORState = isXOREnabled;
             const intermediateFormat = imageRuntime.webpTranscodeSupported ? 'webp' : 'png';
             batchProcessModal.style.display = 'none';
             
             xorAppliedForEncrypt = false;
             xorAppliedForDecrypt = false;
-            
-            for (let i = 0; i < count; i++) {
-                if (i === 0) {
-                    isXOREnabled = imageRuntime.webpTranscodeSupported === true;
-                } else {
-                    isXOREnabled = false;
+
+            try {
+                for (let i = 0; i < count; i++) {
+                    batchXORStateOverride = isXOREnabled && (i === 0) && imageRuntime.webpTranscodeSupported === true;
+                    imgFormatSelect.value = (i < count - 1) ? intermediateFormat : format;
+                    await handleImages(mode);
                 }
-                xorToggle.checked = isXOREnabled;
-                imgFormatSelect.value = (i < count - 1) ? intermediateFormat : format;
-                await handleImages(mode);
+            } finally {
+                batchXORStateOverride = null;
+                imgFormatSelect.value = originalFormat;
             }
-            
-            imgFormatSelect.value = originalFormat;
-            isXOREnabled = originalXORState;
-            xorToggle.checked = originalXORState;
         }
         
         document.getElementById('executeBatchBtn').addEventListener('click', executeBatchProcess);
@@ -2812,3 +2809,8 @@
 </body>
 
 </html>
+
+
+
+
+
