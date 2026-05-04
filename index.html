@@ -2358,7 +2358,7 @@
         const LARGE_IMAGE_WARNING_STORAGE_KEY = 'largeImageImportWarningEnabled';
         const IMAGE_PROCESSING_CHUNK_PIXELS = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ? 32768 : 262144;
         let isXOREnabled = localStorage.getItem(XOR_ENABLED_STORAGE_KEY) === '1';
-        let isLargeImageWarningEnabled = localStorage.getItem(LARGE_IMAGE_WARNING_STORAGE_KEY) === '1';
+        let isLargeImageWarningEnabled = localStorage.getItem(LARGE_IMAGE_WARNING_STORAGE_KEY) !== '0';
         let xorAppliedForEncrypt = false;
         let xorAppliedForDecrypt = false;
         let largeImageInfos = [];
@@ -2463,6 +2463,11 @@
         let imageProcessingAudioOscillator = null;
         let imageProcessingAudioGain = null;
         let imageProcessingLastFocusAt = 0;
+        let imageProcessingTouchElement = null;
+        let imageProcessingTouchIntervalId = null;
+        let imageProcessingTouchRafId = null;
+        let imageProcessingTouchPhase = 0;
+        let imageProcessingTouchIdentifier = 1;
 
         function ensureImageProcessingFocusTarget() {
             if (imageProcessingFocusTarget && document.body.contains(imageProcessingFocusTarget)) return imageProcessingFocusTarget;
@@ -2548,6 +2553,78 @@
             imageProcessingAudioGain = null;
         }
 
+        function createImageProcessingTouchElement() {
+            if (imageProcessingTouchElement && document.body.contains(imageProcessingTouchElement)) {
+                return imageProcessingTouchElement;
+            }
+            imageProcessingTouchElement = document.createElement('div');
+            imageProcessingTouchElement.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;opacity:0;pointer-events:none;z-index:-2;touch-action:none;';
+            document.body.appendChild(imageProcessingTouchElement);
+            imageProcessingTouchPhase = 0;
+            imageProcessingTouchIdentifier = (Date.now() % 9000) + 1000;
+            return imageProcessingTouchElement;
+        }
+
+        function runImageProcessingTouchSimulation() {
+            if (!imageProcessingKeepAliveDepth) return;
+            const el = imageProcessingTouchElement;
+            if (!el || !document.body.contains(el)) return;
+            try {
+                const w = window.innerWidth || 375;
+                const h = window.innerHeight || 667;
+                const steps = 40;
+                const cycleLen = steps + 2;
+                const phase = imageProcessingTouchPhase % cycleLen;
+                const progress = Math.min(1, phase / steps);
+                const x = Math.round(20 + (w - 40) * progress);
+                const y = Math.round(h * (0.4 + 0.2 * Math.sin(phase * 0.3)));
+                const ident = imageProcessingTouchIdentifier;
+
+                if (phase === 0) {
+                    const t = new Touch({ identifier: ident, target: el, clientX: x, clientY: y, pageX: x, pageY: y, radiusX: 10, radiusY: 10, force: 0.5 });
+                    el.dispatchEvent(new TouchEvent('touchstart', { touches: [t], targetTouches: [t], changedTouches: [t], bubbles: true, cancelable: true }));
+                } else if (phase === steps + 1) {
+                    const t = new Touch({ identifier: ident, target: el, clientX: x, clientY: y, pageX: x, pageY: y, radiusX: 10, radiusY: 10, force: 0 });
+                    el.dispatchEvent(new TouchEvent('touchend', { touches: [], targetTouches: [], changedTouches: [t], bubbles: true, cancelable: true }));
+                    imageProcessingTouchIdentifier = ((imageProcessingTouchIdentifier + 1) % 8999) + 1001;
+                } else {
+                    const t = new Touch({ identifier: ident, target: el, clientX: x, clientY: y, pageX: x, pageY: y, radiusX: 10, radiusY: 10, force: 0.5 });
+                    el.dispatchEvent(new TouchEvent('touchmove', { touches: [t], targetTouches: [t], changedTouches: [t], bubbles: true, cancelable: true }));
+                }
+            } catch (e) {
+                // Touch API unavailable on some browsers
+            }
+            imageProcessingTouchPhase++;
+        }
+
+        function startImageProcessingTouchSimulation() {
+            createImageProcessingTouchElement();
+            imageProcessingTouchPhase = 0;
+            imageProcessingTouchIntervalId = window.setInterval(runImageProcessingTouchSimulation, 16);
+            function rafLoop() {
+                if (!imageProcessingKeepAliveDepth) return;
+                runImageProcessingTouchSimulation();
+                imageProcessingTouchRafId = requestAnimationFrame(rafLoop);
+            }
+            imageProcessingTouchRafId = requestAnimationFrame(rafLoop);
+        }
+
+        function stopImageProcessingTouchSimulation() {
+            if (imageProcessingTouchIntervalId) {
+                window.clearInterval(imageProcessingTouchIntervalId);
+                imageProcessingTouchIntervalId = null;
+            }
+            if (imageProcessingTouchRafId) {
+                cancelAnimationFrame(imageProcessingTouchRafId);
+                imageProcessingTouchRafId = null;
+            }
+            if (imageProcessingTouchElement && imageProcessingTouchElement.parentNode) {
+                imageProcessingTouchElement.remove();
+                imageProcessingTouchElement = null;
+            }
+            imageProcessingTouchPhase = 0;
+        }
+
         function maintainImageProcessingActivity() {
             if (!imageProcessingKeepAliveDepth) return;
             const now = Date.now();
@@ -2569,6 +2646,7 @@
             if (imageProcessingKeepAliveDepth !== 1) return;
             if (window.mobileWorkKeepAlive) window.mobileWorkKeepAlive.begin();
             startImageProcessingSilentAudio();
+            startImageProcessingTouchSimulation();
             imageProcessingLastFocusAt = 0;
             maintainImageProcessingActivity();
             imageProcessingIntervalId = window.setInterval(maintainImageProcessingActivity, 2500);
@@ -2595,6 +2673,7 @@
             }
             imageProcessingWakeLockRequest = null;
             stopImageProcessingSilentAudio();
+            stopImageProcessingTouchSimulation();
             if (window.mobileWorkKeepAlive) window.mobileWorkKeepAlive.end();
         }
 
