@@ -2360,7 +2360,13 @@
         const IMAGE_PROCESSING_CHUNK_PIXELS = IS_MOBILE_IMAGE_PROCESSING ? 32768 : 262144;
         const GPU_REMAP_MIN_PIXELS = IS_MOBILE_IMAGE_PROCESSING ? 512 * 512 : 1024 * 1024;
         const GPU_REMAP_MAX_PACKED_INDEX = 16777215;
+        const WORKER_REMAP_MIN_PIXELS = IS_MOBILE_IMAGE_PROCESSING ? 256 * 256 : 512 * 512;
         let imageGpuRemapAvailable = null;
+        let imageRemapWorkerAvailable = typeof Worker === 'function' && typeof Blob === 'function' && typeof URL !== 'undefined';
+        let imageRemapWorker = null;
+        let imageRemapWorkerUrl = null;
+        let imageRemapWorkerJobId = 0;
+        const imageRemapWorkerJobs = new Map();
         let isXOREnabled = localStorage.getItem(XOR_ENABLED_STORAGE_KEY) === '1';
         let isLargeImageWarningEnabled = localStorage.getItem(LARGE_IMAGE_WARNING_STORAGE_KEY) !== '0';
         let xorAppliedForEncrypt = false;
@@ -2716,6 +2722,84 @@
         }
 
         // 更新加密计数显示
+        function getImageRemapWorker() {
+            if (!imageRemapWorkerAvailable) return null;
+            if (imageRemapWorker) return imageRemapWorker;
+            try {
+                const workerSource = `
+                    self.onmessage = function(event) {
+                        var message = event.data || {};
+                        if (message.type !== 'remap') return;
+                        try {
+                            var data = new Uint8ClampedArray(message.dataBuffer);
+                            var map = new Uint32Array(message.mapBuffer);
+                            var totalPixels = message.totalPixels;
+                            var output = new Uint8ClampedArray(data.length);
+                            for (var dstIdx = 0; dstIdx < totalPixels; dstIdx++) {
+                                var srcIdx = map[dstIdx];
+                                var dstOffset = dstIdx * 4;
+                                var srcOffset = srcIdx * 4;
+                                output[dstOffset] = data[srcOffset];
+                                output[dstOffset + 1] = data[srcOffset + 1];
+                                output[dstOffset + 2] = data[srcOffset + 2];
+                                output[dstOffset + 3] = data[srcOffset + 3];
+                            }
+                            self.postMessage({ id: message.id, ok: true, buffer: output.buffer }, [output.buffer]);
+                        } catch (error) {
+                            self.postMessage({ id: message.id, ok: false, error: error && error.message ? error.message : String(error) });
+                        }
+                    };
+                `;
+                imageRemapWorkerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'application/javascript' }));
+                imageRemapWorker = new Worker(imageRemapWorkerUrl);
+                imageRemapWorker.onmessage = function(event) {
+                    const message = event.data || {};
+                    const job = imageRemapWorkerJobs.get(message.id);
+                    if (!job) return;
+                    imageRemapWorkerJobs.delete(message.id);
+                    if (message.ok) job.resolve(new Uint8ClampedArray(message.buffer));
+                    else job.reject(new Error(message.error || 'Image remap worker failed'));
+                };
+                imageRemapWorker.onerror = function(error) {
+                    const pendingJobs = Array.from(imageRemapWorkerJobs.values());
+                    imageRemapWorkerJobs.clear();
+                    imageRemapWorkerAvailable = false;
+                    imageRemapWorker = null;
+                    pendingJobs.forEach(job => job.reject(new Error(error && error.message ? error.message : 'Image remap worker failed')));
+                };
+                return imageRemapWorker;
+            } catch (error) {
+                console.warn('Image remap worker is unavailable', error);
+                imageRemapWorkerAvailable = false;
+                if (imageRemapWorkerUrl) {
+                    URL.revokeObjectURL(imageRemapWorkerUrl);
+                    imageRemapWorkerUrl = null;
+                }
+                return null;
+            }
+        }
+
+        function remapImagePixelsInWorker(data, pixelMap, totalPixels) {
+            const worker = getImageRemapWorker();
+            if (!worker) return null;
+            const jobId = ++imageRemapWorkerJobId;
+            return new Promise((resolve, reject) => {
+                imageRemapWorkerJobs.set(jobId, { resolve, reject });
+                try {
+                    worker.postMessage({
+                        type: 'remap',
+                        id: jobId,
+                        dataBuffer: data.buffer,
+                        mapBuffer: pixelMap.buffer,
+                        totalPixels
+                    });
+                } catch (error) {
+                    imageRemapWorkerJobs.delete(jobId);
+                    reject(error);
+                }
+            });
+        }
+
         function createImageGpuShader(gl, type, source) {
             const shader = gl.createShader(type);
             gl.shaderSource(shader, source);
@@ -2843,6 +2927,18 @@
                 } catch (error) {
                     console.warn('WebGL image remap failed; falling back to CPU', error);
                     imageGpuRemapAvailable = false;
+                }
+            }
+            if (totalPixels >= WORKER_REMAP_MIN_PIXELS && imageRemapWorkerAvailable) {
+                const workerResultPromise = remapImagePixelsInWorker(data, pixelMap, totalPixels);
+                if (workerResultPromise) {
+                    try {
+                        const result = await workerResultPromise;
+                        await yieldToBrowser();
+                        return result;
+                    } catch (error) {
+                        console.warn('Worker image remap failed; falling back to main thread CPU', error);
+                    }
                 }
             }
             return remapImagePixelsAsync(data, pixelMap, totalPixels);
