@@ -591,15 +591,12 @@
                 const wrap = document.getElementById('canvasFullscreenWrapper');
                 if (!document.fullscreenElement) {
                     // 进入全屏
-                    console.log('Entering fullscreen - isMobile:', isMobile, 'isLandscapeVideo:', isLandscapeVideo, 'videoWidth:', videoWidth, 'videoHeight:', videoHeight);
                     wrap.requestFullscreen().then(() => {
-                        console.log('Fullscreen entered successfully');
                     }).catch(err => {
                         console.error('Error entering fullscreen:', err);
                     });
                 } else {
                     // 退出全屏
-                    console.log('Exiting fullscreen');
                     document.exitFullscreen();
                 }
             }
@@ -710,8 +707,6 @@
         // 监听全屏状态变化
         document.addEventListener('fullscreenchange', () => {
             if (document.fullscreenElement) {
-                // 进入全屏
-                console.log('Fullscreen entered - isMobile:', isMobile, 'isLandscapeVideo:', isLandscapeVideo);
                 // 重置缩放状态
                 currentScale = 1;
                 lastDistance = 0;
@@ -720,7 +715,6 @@
                 canvasWrapper.style.transformOrigin = '';
                 
                 if (isMobile && isLandscapeVideo) {
-                    console.log('Applying landscape rotation');
                     // 对于移动设备横屏视频，强制横屏显示
                     const fullscreenElement = document.fullscreenElement;
                     if (fullscreenElement) {
@@ -743,7 +737,6 @@
                 }
             } else {
                 // 退出全屏
-                console.log('Fullscreen exited');
                 // 恢复全屏元素样式
                 const wrap = document.getElementById('canvasFullscreenWrapper');
                 if (wrap.dataset.originalStyle) {
@@ -874,7 +867,7 @@
         const IMAGE_CIPHER_WASM_URL = new URL('../wasm/hilbert_image_cipher_wasm.js', document.currentScript && document.currentScript.src ? document.currentScript.src : window.location.href).href;
         let imageCipherWasmPromise = null;
         let imageCipherWasmAvailable = true;
-        const IMAGE_CIPHER_DEBUG_PREFIX = '[WASM-CIPHER]';
+        const IMAGE_CIPHER_DEBUG_PREFIX = null;
         let imageCipherSuccessEffectsStarted = false;
         xorToggle.checked = isXOREnabled;
         if (largeImageWarningToggle) largeImageWarningToggle.checked = isLargeImageWarningEnabled;
@@ -926,11 +919,7 @@
         }
 
         function logImageCipherDebug(event, details) {
-            const payload = Object.assign({
-                event,
-                time: new Date().toISOString()
-            }, details || {});
-            console.log(IMAGE_CIPHER_DEBUG_PREFIX, payload);
+            // debug logging disabled
         }
 
         async function initImageCipherWasm() {
