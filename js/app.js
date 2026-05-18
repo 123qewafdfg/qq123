@@ -848,6 +848,11 @@
         let imageRemapWorkerUrl = null;
         let imageRemapWorkerJobId = 0;
         const imageRemapWorkerJobs = new Map();
+        // WASM worker for off-main-thread processing
+        let wasmProcessingWorker = null;
+        let wasmWorkerAvailable = typeof Worker === 'function' && typeof Blob === 'function' && typeof URL !== 'undefined';
+        let wasmWorkerJobId = 0;
+        const wasmWorkerJobs = new Map();
         let isXOREnabled = localStorage.getItem(XOR_ENABLED_STORAGE_KEY) === '1';
         let isLargeImageWarningEnabled = localStorage.getItem(LARGE_IMAGE_WARNING_STORAGE_KEY) === '1';
         let xorAppliedForEncrypt = false;
@@ -969,6 +974,39 @@
 
         initImageCipherWasm();
 
+        function getWasmWorker() {
+            if (!wasmWorkerAvailable) return null;
+            if (wasmProcessingWorker) return wasmProcessingWorker;
+            try {
+                const workerUrl = new URL('wasm-worker.js', document.currentScript && document.currentScript.src ? document.currentScript.src : window.location.href).href;
+                wasmProcessingWorker = new Worker(workerUrl, { type: 'module' });
+                wasmProcessingWorker.onmessage = function (event) {
+                    const msg = event.data;
+                    const job = wasmWorkerJobs.get(msg.id);
+                    if (!job) return;
+                    wasmWorkerJobs.delete(msg.id);
+                    if (msg.type === 'result' && msg.buffer) {
+                        job.resolve(new Uint8ClampedArray(msg.buffer));
+                    } else if (msg.type === 'mapResult' && msg.buffer) {
+                        job.resolve(new Uint32Array(msg.buffer));
+                    } else {
+                        job.reject(new Error(msg.message || 'WASM worker error'));
+                    }
+                };
+                wasmProcessingWorker.onerror = function () {
+                    wasmWorkerAvailable = false;
+                    wasmProcessingWorker = null;
+                    // reject all pending
+                    wasmWorkerJobs.forEach(j => j.reject(new Error('WASM worker crashed')));
+                    wasmWorkerJobs.clear();
+                };
+                return wasmProcessingWorker;
+            } catch (e) {
+                wasmWorkerAvailable = false;
+                return null;
+            }
+        }
+
         async function processImagePixelsWithWasm(data, width, height, mode, blockW, blockH, keyStr, rounds, shouldApplyXOR) {
             const startedAt = performance.now();
             const request = {
@@ -986,6 +1024,37 @@
                 shouldApplyXOR: !!shouldApplyXOR
             };
             logImageCipherDebug('wasm-process-request', request);
+
+            // Try worker path first (off main thread)
+            const worker = getWasmWorker();
+            if (worker) {
+                const jobId = ++wasmWorkerJobId;
+                return new Promise((resolve, reject) => {
+                    wasmWorkerJobs.set(jobId, { resolve, reject });
+                    try {
+                        const dataCopy = new Uint8Array(data);
+                        worker.postMessage({
+                            type: 'process',
+                            id: jobId,
+                            data: dataCopy.buffer,
+                            width,
+                            height,
+                            method: imgMethod === 'block' ? 1 : 0,
+                            mode: mode === 'decrypt' ? 1 : 0,
+                            key: keyStr,
+                            blockW: Math.max(1, blockW || 1),
+                            blockH: Math.max(1, blockH || 1),
+                            rounds: Math.max(1, rounds || 1),
+                            xor: !!shouldApplyXOR
+                        }, [dataCopy.buffer]);
+                    } catch (err) {
+                        wasmWorkerJobs.delete(jobId);
+                        reject(err);
+                    }
+                });
+            }
+
+            // Fallback: direct WASM on main thread
             const wasm = await initImageCipherWasm();
             if (!wasm) {
                 logImageCipherDebug('wasm-process-unavailable-return-null', request);
@@ -1201,6 +1270,9 @@
                         flash.alpha = 1;
                     });
                 });
+                // Keep running — decorative sweep. Hide overlay when idle to avoid stale frozen artifacts.
+                app.canvas.style.opacity = '1';
+                if (!window.__pixiGoldApp) window.__pixiGoldApp = app;
                 logImageCipherDebug('pixi-gold-effect-started', {
                     targets: targets.length,
                     effect: 'button-gradient-sweep',
@@ -1660,40 +1732,79 @@
             return packed;
         }
 
+        // Persistent WebGL context for GPU remap (created once, reused across images)
+        let gpuRemapCanvas = null;
+        let gpuRemapGl = null;
+        let gpuRemapProgram = null;
+        let gpuRemapPosBuffer = null;
+        let gpuRemapPosLoc = -1;
+        let gpuRemapMaxSize = 0;
+
+        function ensureGpuRemapContext(width, height) {
+            if (gpuRemapGl) {
+                if (width <= gpuRemapMaxSize && height <= gpuRemapMaxSize) {
+                    // Resize canvas if dimensions changed (context state resets, need re-setup)
+                    if (gpuRemapCanvas.width !== width || gpuRemapCanvas.height !== height) {
+                        gpuRemapCanvas.width = width;
+                        gpuRemapCanvas.height = height;
+                    }
+                    return gpuRemapGl;
+                }
+                // Image too large for current context — recreate
+                cleanupGpuRemapContext();
+            }
+            gpuRemapCanvas = document.createElement('canvas');
+            gpuRemapCanvas.width = width;
+            gpuRemapCanvas.height = height;
+            gpuRemapGl = gpuRemapCanvas.getContext('webgl', { alpha: true, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: true });
+            if (!gpuRemapGl) throw new Error('WebGL is unavailable');
+            gpuRemapMaxSize = gpuRemapGl.getParameter(gpuRemapGl.MAX_TEXTURE_SIZE);
+            if (width > gpuRemapMaxSize || height > gpuRemapMaxSize) {
+                cleanupGpuRemapContext();
+                throw new Error('Image exceeds max WebGL texture size');
+            }
+            gpuRemapProgram = createImageGpuProgram(gpuRemapGl);
+            gpuRemapPosBuffer = gpuRemapGl.createBuffer();
+            gpuRemapGl.bindBuffer(gpuRemapGl.ARRAY_BUFFER, gpuRemapPosBuffer);
+            gpuRemapGl.bufferData(gpuRemapGl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gpuRemapGl.STATIC_DRAW);
+            gpuRemapPosLoc = gpuRemapGl.getAttribLocation(gpuRemapProgram, 'a_position');
+            return gpuRemapGl;
+        }
+
+        function cleanupGpuRemapContext() {
+            if (gpuRemapProgram) { try { gpuRemapGl.deleteProgram(gpuRemapProgram); } catch(e) {} gpuRemapProgram = null; }
+            if (gpuRemapPosBuffer) { try { gpuRemapGl.deleteBuffer(gpuRemapPosBuffer); } catch(e) {} gpuRemapPosBuffer = null; }
+            if (gpuRemapGl) { try { gpuRemapGl.getExtension('WEBGL_lose_context')?.loseContext(); } catch(e) {} gpuRemapGl = null; }
+            gpuRemapCanvas = null;
+            gpuRemapPosLoc = -1;
+            gpuRemapMaxSize = 0;
+        }
+
         function remapImagePixelsGpu(data, pixelMap, width, height) {
             const totalPixels = width * height;
             if (totalPixels > GPU_REMAP_MAX_PACKED_INDEX) throw new Error('Image is too large for packed WebGL remap');
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const gl = canvas.getContext('webgl', { alpha: true, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: true });
+            const gl = ensureGpuRemapContext(width, height);
             if (!gl) throw new Error('WebGL is unavailable');
-            const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
-            if (width > maxTextureSize || height > maxTextureSize) throw new Error('Image exceeds max WebGL texture size');
-
-            const program = createImageGpuProgram(gl);
-            const positionBuffer = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
-            const imageTexture = createImageGpuTexture(gl, 0, width, height, data);
-            const mapTexture = createImageGpuTexture(gl, 1, width, height, packPixelMapForGpu(pixelMap, totalPixels));
-            const output = new Uint8Array(data.length);
 
             gl.viewport(0, 0, width, height);
-            gl.useProgram(program);
-            const positionLocation = gl.getAttribLocation(program, 'a_position');
-            gl.enableVertexAttribArray(positionLocation);
-            gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
-            gl.uniform1i(gl.getUniformLocation(program, 'u_image'), 0);
-            gl.uniform1i(gl.getUniformLocation(program, 'u_map'), 1);
-            gl.uniform2f(gl.getUniformLocation(program, 'u_size'), width, height);
+            gl.useProgram(gpuRemapProgram);
+            gl.enableVertexAttribArray(gpuRemapPosLoc);
+            gl.bindBuffer(gl.ARRAY_BUFFER, gpuRemapPosBuffer);
+            gl.vertexAttribPointer(gpuRemapPosLoc, 2, gl.FLOAT, false, 0, 0);
+
+            const imageTexture = createImageGpuTexture(gl, 0, width, height, data);
+            const mapTexture = createImageGpuTexture(gl, 1, width, height, packPixelMapForGpu(pixelMap, totalPixels));
+
+            gl.uniform1i(gl.getUniformLocation(gpuRemapProgram, 'u_image'), 0);
+            gl.uniform1i(gl.getUniformLocation(gpuRemapProgram, 'u_map'), 1);
+            gl.uniform2f(gl.getUniformLocation(gpuRemapProgram, 'u_size'), width, height);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+            const output = new Uint8Array(data.length);
             gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, output);
 
             gl.deleteTexture(imageTexture);
             gl.deleteTexture(mapTexture);
-            gl.deleteBuffer(positionBuffer);
-            gl.deleteProgram(program);
             return new Uint8ClampedArray(output.buffer);
         }
 
@@ -2121,8 +2232,9 @@
                 compressedFiles[index] = createFileLike(blob, file.name || `compressed_${index}.png`);
             }
             selectedImageFiles = compressedFiles;
-            previewUrls.forEach(url => URL.revokeObjectURL(url));
-            previewUrls = selectedImageFiles.map(f => URL.createObjectURL(f));
+            previewUrls.forEach(url => { if (url != null) URL.revokeObjectURL(url); });
+            previewUrls = new Array(selectedImageFiles.length).fill(null);
+            if (selectedImageFiles.length > 0) previewUrls[0] = URL.createObjectURL(selectedImageFiles[0]);
             latestProcessedImages = [];
             latestKeyParams = null;
             clearTransientImageCache();
@@ -2835,8 +2947,9 @@
         function resetToOriginal() {
             if (isProcessing) { alert('请等待当前处理完成'); return; }
             if (!selectedImageFiles.length) { alert('没有已选择的图片'); return; }
-            previewUrls.forEach(url => URL.revokeObjectURL(url));
-            previewUrls = selectedImageFiles.map(f => URL.createObjectURL(f));
+            previewUrls.forEach(url => { if (url != null) URL.revokeObjectURL(url); });
+            previewUrls = new Array(selectedImageFiles.length).fill(null);
+            if (selectedImageFiles.length > 0) previewUrls[0] = URL.createObjectURL(selectedImageFiles[0]);
             currentPreviewIndex = 0; latestProcessedImages = []; latestKeyParams = null;
             downloadAllBtn.classList.remove('highlight');
             imageProgress.value = 0; selectedCountDisplay.value = `导入${selectedImageFiles.length}张图片`;
@@ -2853,6 +2966,8 @@
             if (isProcessing) return; if (!selectedImageFiles.length) { alert('请先选择图片文件'); return; }
             isProcessing = true; disableExportControls();
             beginImageProcessingKeepAlive();
+            // Show PIXI gold sweep overlay during processing
+            if (window.__pixiGoldApp) window.__pixiGoldApp.canvas.style.opacity = '1';
             try {
                 await xorCompatibilityReady;
                 imageProgress.value = 0; downloadAllBtn.classList.remove('highlight');
@@ -2903,8 +3018,9 @@
                     previousProcessedImages.length = 0;
                 }
                 latestProcessedImages = results.filter(r => r !== undefined);
-                previewUrls.forEach(url => URL.revokeObjectURL(url));
-                previewUrls = latestProcessedImages.map(r => URL.createObjectURL(r.blob));
+                previewUrls.forEach(url => { if (url != null) URL.revokeObjectURL(url); });
+                previewUrls = new Array(latestProcessedImages.length).fill(null);
+                if (latestProcessedImages.length > 0) previewUrls[0] = URL.createObjectURL(latestProcessedImages[0].blob);
                 currentPreviewIndex = 0;
                 const formatText = imgFormatSelect.options[imgFormatSelect.selectedIndex].text;
                 downloadAllBtn.classList.add('highlight'); 
@@ -2929,10 +3045,12 @@
                 if (isReencryptEnabled) {
                     enableExportControls();
                 }
-            } catch (e) { console.error(e); alert(`处理失败: ${e.message}`); enableExportControls(); latestProcessedImages = []; previewUrls.forEach(url => URL.revokeObjectURL(url)); previewUrls = selectedImageFiles.map(f => URL.createObjectURL(f)); imageProgress.value = 0; selectedCountDisplay.value = `导入${selectedImageFiles.length}张图片`; }
+            } catch (e) { console.error(e); alert(`处理失败: ${e.message}`); enableExportControls(); latestProcessedImages = []; previewUrls.forEach(url => { if (url != null) URL.revokeObjectURL(url); }); previewUrls = new Array(selectedImageFiles.length).fill(null); if (selectedImageFiles.length > 0) previewUrls[0] = URL.createObjectURL(selectedImageFiles[0]); imageProgress.value = 0; selectedCountDisplay.value = `导入${selectedImageFiles.length}张图片`; }
             finally {
                 isProcessing = false;
                 endImageProcessingKeepAlive();
+                // Pause PIXI gold ticker when idle — no forced layout during scroll
+                if (window.__pixiGoldApp) window.__pixiGoldApp.canvas.style.opacity = '0';
             }
         }
 
@@ -3003,8 +3121,9 @@
             if (!files.length) { alert('请选择图片文件'); return; }
             const importSequence = ++imageImportSequence;
             selectedImageFiles = files;
-            previewUrls.forEach(url => URL.revokeObjectURL(url));
-            previewUrls = files.map(f => URL.createObjectURL(f));
+            previewUrls.forEach(url => { if (url != null) URL.revokeObjectURL(url); });
+            previewUrls = new Array(files.length).fill(null);
+            if (files.length > 0) previewUrls[0] = URL.createObjectURL(files[0]);
             latestProcessedImages = []; latestKeyParams = null;
             clearTransientImageCache();
             // 显示导入了x张图片的状态
@@ -3028,13 +3147,40 @@
             }
             scheduleImportFallbackDimensionWork(files, importSequence, headerInspection.fallbackIndexes, hasImmediateLargeWarning);
         });
+        // Lazy preview URL: create blob URL on demand, revoke previous when navigating
+        function ensurePreviewUrl(index) {
+            if (previewUrls[index] == null) {
+                if (latestProcessedImages.length > 0 && index < latestProcessedImages.length && latestProcessedImages[index]) {
+                    previewUrls[index] = URL.createObjectURL(latestProcessedImages[index].blob);
+                } else if (index < selectedImageFiles.length && selectedImageFiles[index]) {
+                    previewUrls[index] = URL.createObjectURL(selectedImageFiles[index]);
+                }
+            }
+            return previewUrls[index];
+        }
+        function navigatePreview(delta) {
+            if (previewUrls.length === 0) return;
+            // Revoke old URL to free memory
+            if (previewUrls[currentPreviewIndex] != null) {
+                URL.revokeObjectURL(previewUrls[currentPreviewIndex]);
+                previewUrls[currentPreviewIndex] = null;
+            }
+            currentPreviewIndex = (currentPreviewIndex + delta + previewUrls.length) % previewUrls.length;
+            const url = ensurePreviewUrl(currentPreviewIndex);
+            if (url) previewImg.src = url;
+            previewCounter.innerText = `${currentPreviewIndex+1} / ${previewUrls.length}`;
+        }
         viewPreviewBtn.addEventListener('click', () => {
             if (previewUrls.length === 0) { alert('请先选择图片'); return; }
-            currentPreviewIndex = 0; previewImg.src = previewUrls[0]; previewCounter.innerText = `1 / ${previewUrls.length}`; previewModal.style.display = 'flex';
+            currentPreviewIndex = 0;
+            const url = ensurePreviewUrl(0);
+            if (url) previewImg.src = url;
+            previewCounter.innerText = `1 / ${previewUrls.length}`;
+            previewModal.style.display = 'flex';
         });
         window.addEventListener('click', (e) => { if (e.target === previewModal) previewModal.style.display = 'none'; });
-        prevBtn.addEventListener('click', () => { if (previewUrls.length === 0) return; currentPreviewIndex = (currentPreviewIndex - 1 + previewUrls.length) % previewUrls.length; previewImg.src = previewUrls[currentPreviewIndex]; previewCounter.innerText = `${currentPreviewIndex+1} / ${previewUrls.length}`; });
-        nextBtn.addEventListener('click', () => { if (previewUrls.length === 0) return; currentPreviewIndex = (currentPreviewIndex + 1) % previewUrls.length; previewImg.src = previewUrls[currentPreviewIndex]; previewCounter.innerText = `${currentPreviewIndex+1} / ${previewUrls.length}`; });
+        prevBtn.addEventListener('click', () => navigatePreview(-1));
+        nextBtn.addEventListener('click', () => navigatePreview(1));
         // 点击预览计数器关闭预览窗口
         previewCounter.addEventListener('click', () => {
             previewModal.style.display = 'none';
@@ -3125,8 +3271,9 @@
                 }
 
                 latestProcessedImages = results.filter(r => r !== undefined);
-                previewUrls.forEach(url => URL.revokeObjectURL(url));
-                previewUrls = latestProcessedImages.map(r => URL.createObjectURL(r.blob));
+                previewUrls.forEach(url => { if (url != null) URL.revokeObjectURL(url); });
+                previewUrls = new Array(latestProcessedImages.length).fill(null);
+                if (latestProcessedImages.length > 0) previewUrls[0] = URL.createObjectURL(latestProcessedImages[0].blob);
                 currentPreviewIndex = 0;
                 downloadAllBtn.classList.add('highlight');
                 selectedCountDisplay.value = `批量完成${latestProcessedImages.length}张图片`;
@@ -3153,8 +3300,9 @@
                 alert(`批量处理失败: ${e.message}`);
                 enableExportControls();
                 latestProcessedImages = [];
-                previewUrls.forEach(url => URL.revokeObjectURL(url));
-                previewUrls = selectedImageFiles.map(f => URL.createObjectURL(f));
+                previewUrls.forEach(url => { if (url != null) URL.revokeObjectURL(url); });
+                previewUrls = new Array(selectedImageFiles.length).fill(null);
+                if (selectedImageFiles.length > 0) previewUrls[0] = URL.createObjectURL(selectedImageFiles[0]);
                 imageProgress.value = 0;
                 selectedCountDisplay.value = `导入${selectedImageFiles.length}张图片`;
             } finally {

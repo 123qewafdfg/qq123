@@ -20,7 +20,7 @@ export const CipherMode = Object.freeze({
  * @param {Uint8Array} data
  */
 export function apply_xor_rgba(data) {
-    var ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    var ptr0 = __persistPass8(data);
     var len0 = WASM_VECTOR_LEN;
     const ret = wasm.apply_xor_rgba(ptr0, len0, data);
     if (ret[1]) {
@@ -37,14 +37,14 @@ export function apply_xor_rgba(data) {
  * @returns {Uint32Array}
  */
 export function build_block_decrypt_map(width, height, block_width, block_height, key) {
-    const ptr0 = passStringToWasm0(key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr0 = __persistPassKey(key);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.build_block_decrypt_map(width, height, block_width, block_height, ptr0, len0);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
     var v2 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    __safeFree(ret[0], ret[1] * 4, 4);
     return v2;
 }
 
@@ -57,7 +57,7 @@ export function build_block_decrypt_map(width, height, block_width, block_height
  * @returns {Uint32Array}
  */
 export function build_block_encrypt_map(width, height, block_width, block_height, key) {
-    const ptr0 = passStringToWasm0(key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr0 = __persistPassKey(key);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.build_block_encrypt_map(width, height, block_width, block_height, ptr0, len0);
     if (ret[3]) {
@@ -75,14 +75,14 @@ export function build_block_encrypt_map(width, height, block_width, block_height
  * @returns {Uint32Array}
  */
 export function build_gilbert_decrypt_map(width, height, key) {
-    const ptr0 = passStringToWasm0(key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr0 = __persistPassKey(key);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.build_gilbert_decrypt_map(width, height, ptr0, len0);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
     var v2 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    __safeFree(ret[0], ret[1] * 4, 4);
     return v2;
 }
 
@@ -93,14 +93,14 @@ export function build_gilbert_decrypt_map(width, height, key) {
  * @returns {Uint32Array}
  */
 export function build_gilbert_encrypt_map(width, height, key) {
-    const ptr0 = passStringToWasm0(key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr0 = __persistPassKey(key);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.build_gilbert_encrypt_map(width, height, ptr0, len0);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
     var v2 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    __safeFree(ret[0], ret[1] * 4, 4);
     return v2;
 }
 
@@ -109,11 +109,11 @@ export function build_gilbert_encrypt_map(width, height, key) {
  * @returns {Uint32Array}
  */
 export function invert_map(map) {
-    const ptr0 = passArray32ToWasm0(map, wasm.__wbindgen_malloc);
+    const ptr0 = __persistPass32(map);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.invert_map(ptr0, len0);
     var v2 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    __safeFree(ret[0], ret[1] * 4, 4);
     return v2;
 }
 
@@ -130,16 +130,15 @@ export function invert_map(map) {
  * @returns {Uint8Array}
  */
 export function process_rgba(data, width, height, method, mode, key, block_width, block_height, apply_xor) {
-    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const ptr0 = __persistPass8(data);
     const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr1 = __persistPassKey(key);
     const len1 = WASM_VECTOR_LEN;
     const ret = wasm.process_rgba(ptr0, len0, width, height, method, mode, ptr1, len1, block_width, block_height, apply_xor);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
-    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    var v3 = __zeroCopyU8(ret[0], ret[1]);
     return v3;
 }
 
@@ -157,16 +156,15 @@ export function process_rgba(data, width, height, method, mode, key, block_width
  * @returns {Uint8Array}
  */
 export function process_rgba_rounds(data, width, height, method, mode, key, block_width, block_height, rounds, apply_xor) {
-    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const ptr0 = __persistPass8(data);
     const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr1 = __persistPassKey(key);
     const len1 = WASM_VECTOR_LEN;
     const ret = wasm.process_rgba_rounds(ptr0, len0, width, height, method, mode, ptr1, len1, block_width, block_height, rounds, apply_xor);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
-    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    var v3 = __zeroCopyU8(ret[0], ret[1]);
     return v3;
 }
 
@@ -178,16 +176,15 @@ export function process_rgba_rounds(data, width, height, method, mode, key, bloc
  * @returns {Uint8Array}
  */
 export function remap_rgba(data, map, width, height) {
-    const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+    const ptr0 = __persistPass8(data);
     const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArray32ToWasm0(map, wasm.__wbindgen_malloc);
+    const ptr1 = __persistPass32(map);
     const len1 = WASM_VECTOR_LEN;
     const ret = wasm.remap_rgba(ptr0, len0, ptr1, len1, width, height);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
-    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    var v3 = __zeroCopyU8(ret[0], ret[1]);
     return v3;
 }
 
@@ -196,7 +193,7 @@ export function remap_rgba(data, map, width, height) {
  * @returns {number}
  */
 export function simple_hash(key) {
-    const ptr0 = passStringToWasm0(key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr0 = __persistPassKey(key);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.simple_hash(ptr0, len0);
     return ret >>> 0;
@@ -267,6 +264,63 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function __safeFree(ptr, len, align) {
+    if (!ptr) return;
+    try { wasm.__wbindgen_free(ptr, len, align); } catch (e) {}
+}
+
+// Persistent buffer pool: reuse WASM heap between calls, skip malloc/free churn
+let __cachedPtr8 = 0, __cachedLen8 = 0;
+let __cachedPtr32 = 0, __cachedLen32 = 0;
+let __cachedKeyPtr = 0, __cachedKeyLen = 0, __cachedKeyStr = '';
+
+function __persistPass8(data) {
+    if (__cachedLen8 < data.length) {
+        if (__cachedPtr8) __safeFree(__cachedPtr8, __cachedLen8, 1);
+        __cachedPtr8 = wasm.__wbindgen_malloc(data.length, 1) >>> 0;
+        __cachedLen8 = data.length;
+    }
+    getUint8ArrayMemory0().set(data, __cachedPtr8 / 1);
+    WASM_VECTOR_LEN = data.length;
+    return __cachedPtr8;
+}
+
+function __persistPass32(data) {
+    const bytes = data.length * 4;
+    if (__cachedLen32 < bytes) {
+        if (__cachedPtr32) __safeFree(__cachedPtr32, __cachedLen32, 4);
+        __cachedPtr32 = wasm.__wbindgen_malloc(bytes, 4) >>> 0;
+        __cachedLen32 = bytes;
+    }
+    getUint32ArrayMemory0().set(data, __cachedPtr32 / 4);
+    WASM_VECTOR_LEN = data.length;
+    return __cachedPtr32;
+}
+
+function __persistPassKey(key) {
+    if (key === __cachedKeyStr && __cachedKeyPtr) {
+        WASM_VECTOR_LEN = __cachedKeyLen;
+        return __cachedKeyPtr;
+    }
+    if (__cachedKeyPtr) __safeFree(__cachedKeyPtr, __cachedKeyLen, 1);
+    const enc = cachedTextEncoder.encode(key);
+    __cachedKeyLen = enc.length;
+    __cachedKeyPtr = wasm.__wbindgen_malloc(__cachedKeyLen, 1) >>> 0;
+    getUint8ArrayMemory0().set(enc, __cachedKeyPtr);
+    __cachedKeyStr = key;
+    WASM_VECTOR_LEN = __cachedKeyLen;
+    return __cachedKeyPtr;
+}
+
+// Return zero-copy subarray view; caller MUST consume before next WASM call
+function __zeroCopyU8(ptr, len) {
+    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+}
+
+function __zeroCopyU32(ptr, len) {
+    return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
 }
 
 function passArray32ToWasm0(arg, malloc) {
