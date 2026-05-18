@@ -1027,16 +1027,15 @@
 
             // Try worker path first (off main thread)
             const worker = getWasmWorker();
-            if (worker) {
+            if (worker && data.buffer && data.buffer.byteLength) {
                 const jobId = ++wasmWorkerJobId;
                 return new Promise((resolve, reject) => {
                     wasmWorkerJobs.set(jobId, { resolve, reject });
                     try {
-                        const dataCopy = new Uint8Array(data);
                         worker.postMessage({
                             type: 'process',
                             id: jobId,
-                            data: dataCopy.buffer,
+                            data: data.buffer,
                             width,
                             height,
                             method: imgMethod === 'block' ? 1 : 0,
@@ -1046,7 +1045,7 @@
                             blockH: Math.max(1, blockH || 1),
                             rounds: Math.max(1, rounds || 1),
                             xor: !!shouldApplyXOR
-                        }, [dataCopy.buffer]);
+                        }, data.buffer.byteLength ? [data.buffer] : []);
                     } catch (err) {
                         wasmWorkerJobs.delete(jobId);
                         reject(err);
@@ -1294,22 +1293,16 @@
                     window.scheduler.yield().then(resolve, resolve);
                     return;
                 }
-                if (typeof MessageChannel === 'function') {
-                    const channel = new MessageChannel();
-                    let resolved = false;
-                    const done = () => {
-                        if (resolved) return;
-                        resolved = true;
-                        try { channel.port1.close(); } catch (e) {}
-                        try { channel.port2.close(); } catch (e) {}
-                        resolve();
+                // Reusable MessageChannel — avoid allocation per call
+                if (!yieldToBrowser._channel) {
+                    yieldToBrowser._channel = new MessageChannel();
+                    yieldToBrowser._channel.port1.onmessage = () => {
+                        yieldToBrowser._pendingResolve?.();
+                        yieldToBrowser._pendingResolve = null;
                     };
-                    channel.port1.onmessage = done;
-                    channel.port2.postMessage(0);
-                    requestAnimationFrame(() => { setTimeout(done, 0); });
-                    return;
                 }
-                requestAnimationFrame(resolve);
+                yieldToBrowser._pendingResolve = resolve;
+                yieldToBrowser._channel.port2.postMessage(0);
             });
         }
 
@@ -1862,9 +1855,14 @@
             return { type: 'image/png', quality: undefined };
         }
 
+        let _sharedSurface = null;
         function createCanvasSurface(width, height) {
             if (!width || !height || width <= 0 || height <= 0) {
                 throw new Error('Invalid image dimensions: ' + width + 'x' + height);
+            }
+            // Reuse surface when dimensions match — avoid canvas reallocation
+            if (_sharedSurface && _sharedSurface.canvas.width === width && _sharedSurface.canvas.height === height) {
+                return _sharedSurface;
             }
             const canvas = imageRuntime.hasOffscreenCanvas ? new OffscreenCanvas(width, height) : document.createElement('canvas');
             canvas.width = width;
@@ -1873,7 +1871,8 @@
             if (!ctx) {
                 throw new Error('2D canvas is not supported in this browser');
             }
-            return { canvas, ctx };
+            _sharedSurface = { canvas, ctx };
+            return _sharedSurface;
         }
 
         function dataUrlToBlob(dataUrl) {
@@ -2555,19 +2554,32 @@
             }
         }
 
-        async function processImage(file, mode, blockW, blockH, shouldApplyXOR) {
-            const imageSource = await loadImageSource(file);
-            let width = imageSource.width, height = imageSource.height;
-            const surface = createCanvasSurface(width, height);
-            const canvas = surface.canvas;
-            const ctx = surface.ctx;
-            try {
-                ctx.drawImage(imageSource.source, 0, 0);
-            } finally {
-                imageSource.cleanup();
+        async function processImage(file, mode, blockW, blockH, shouldApplyXOR, preloadedData) {
+            let imageSource, width, height, canvas, ctx, imageData, data;
+            if (preloadedData) {
+                // Reuse preloaded pixel data — skip image decode
+                imageData = preloadedData.imageData;
+                data = imageData.data;
+                width = preloadedData.width;
+                height = preloadedData.height;
+                const surface = createCanvasSurface(width, height);
+                canvas = surface.canvas;
+                ctx = surface.ctx;
+            } else {
+                imageSource = await loadImageSource(file);
+                width = imageSource.width;
+                height = imageSource.height;
+                const surface = createCanvasSurface(width, height);
+                canvas = surface.canvas;
+                ctx = surface.ctx;
+                try {
+                    ctx.drawImage(imageSource.source, 0, 0);
+                } finally {
+                    imageSource.cleanup();
+                }
+                imageData = ctx.getImageData(0, 0, width, height);
+                data = imageData.data;
             }
-            let imageData = ctx.getImageData(0, 0, width, height);
-            let data = imageData.data;
             const keyStr = keyInput.value || '';
             
             if (mode === 'encrypt') {
@@ -2606,17 +2618,48 @@
                         blockH,
                         keyLength: keyStr.length
                     });
+                    // Re-get pixel data if WASM worker transferred buffer
+                    if (data.byteLength === 0) {
+                        imageData = ctx.getImageData(0, 0, width, height);
+                        data = imageData.data;
+                    }
                     let cacheKey = (imgMethod === 'gilbert') ? `gilbert:${width}:${height}:${keyStr}` : `block:${width}:${height}:${keyStr}:${blockW}:${blockH}`;
                     let encMap;
                     const cachedMap = getMapCache(cacheKey);
                     if (cachedMap && cachedMap.encMap) {
                         encMap = cachedMap.encMap;
                     } else {
-                        if (imgMethod === 'gilbert') encMap = buildGilbertEncryptMap(width, height, keyStr);
-                        else encMap = buildBlockEncryptMap(width, height, blockW, blockH, keyStr);
+                        // Try WASM map building first
+                        const wasmFallback = await initImageCipherWasm();
+                        if (wasmFallback) {
+                            try {
+                                encMap = (imgMethod === 'gilbert')
+                                    ? wasmFallback.build_gilbert_encrypt_map(width, height, keyStr)
+                                    : wasmFallback.build_block_encrypt_map(width, height, blockW, blockH, keyStr);
+                            } catch (e) {
+                                logImageCipherDebug('wasm-map-failed', { message: e.message });
+                            }
+                        }
+                        if (!encMap) {
+                            if (imgMethod === 'gilbert') encMap = buildGilbertEncryptMap(width, height, keyStr);
+                            else encMap = buildBlockEncryptMap(width, height, blockW, blockH, keyStr);
+                        }
                         setMapCache(cacheKey, Object.assign({}, cachedMap || {}, { encMap }));
                     }
-                    newData = await remapImagePixelsWithGpuFallback(data, encMap, width, height);
+                    // Try WASM remap_rgba before GPU/JS fallback
+                    const wasmRemap = await initImageCipherWasm();
+                    if (wasmRemap) {
+                        try {
+                            const input = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+                            const output = wasmRemap.remap_rgba(input, encMap, width, height);
+                            if (output) newData = new Uint8ClampedArray(output);
+                        } catch (e) {
+                            logImageCipherDebug('wasm-remap-failed', { message: e.message });
+                        }
+                    }
+                    if (!newData) {
+                        newData = await remapImagePixelsWithGpuFallback(data, encMap, width, height);
+                    }
                     logImageCipherDebug('single-encrypt-js-fallback-finish', {
                         method: imgMethod,
                         width,
@@ -2659,20 +2702,55 @@
                         blockH,
                         keyLength: keyStr.length
                     });
+                    // Re-get pixel data if WASM worker transferred buffer
+                    if (data.byteLength === 0) {
+                        imageData = ctx.getImageData(0, 0, width, height);
+                        data = imageData.data;
+                    }
                     let cacheKey = (imgMethod === 'gilbert') ? `gilbert:${width}:${height}:${keyStr}` : `block:${width}:${height}:${keyStr}:${blockW}:${blockH}`;
-                    let invMap;
+                    let invMap, encMap;
                     const cachedMap = getMapCache(cacheKey);
-                    if (cachedMap) {
+                    if (cachedMap && cachedMap.invMap) {
                         invMap = cachedMap.invMap;
+                        encMap = cachedMap.encMap;
                     }
                     if (!invMap) {
-                        let encMap;
-                        if (imgMethod === 'gilbert') encMap = buildGilbertEncryptMap(width, height, keyStr);
-                        else encMap = buildBlockEncryptMap(width, height, blockW, blockH, keyStr);
-                        invMap = invertMap(encMap, totalPixels);
-                        setMapCache(cacheKey, Object.assign({}, cachedMap || {}, { invMap }));
+                        // Try WASM map building first
+                        const wasmFallback = await initImageCipherWasm();
+                        if (wasmFallback) {
+                            try {
+                                if (imgMethod === 'gilbert') {
+                                    encMap = wasmFallback.build_gilbert_encrypt_map(width, height, keyStr);
+                                    invMap = wasmFallback.invert_map(encMap);
+                                } else {
+                                    encMap = wasmFallback.build_block_encrypt_map(width, height, blockW, blockH, keyStr);
+                                    invMap = wasmFallback.invert_map(encMap);
+                                }
+                            } catch (e) {
+                                logImageCipherDebug('wasm-fallback-map-failed', { message: e.message });
+                            }
+                        }
+                        if (!invMap) {
+                            if (imgMethod === 'gilbert') encMap = buildGilbertEncryptMap(width, height, keyStr);
+                            else encMap = buildBlockEncryptMap(width, height, blockW, blockH, keyStr);
+                            invMap = invertMap(encMap, totalPixels);
+                        }
+                        setMapCache(cacheKey, Object.assign({}, cachedMap || {}, { encMap, invMap }));
                     }
-                    newData = await remapImagePixelsWithGpuFallback(data, invMap, width, height);
+                    // Try WASM remap_rgba before GPU/JS fallback
+                    const wasmRemap = encMap ? await initImageCipherWasm() : null;
+                    if (wasmRemap) {
+                        try {
+                            const input = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+                            const output = wasmRemap.remap_rgba(input, invMap, width, height);
+                            if (output) newData = new Uint8ClampedArray(output);
+                        } catch (e) {
+                            logImageCipherDebug('wasm-remap-failed', { message: e.message });
+                        }
+                    }
+                    if (!newData) {
+                        newData = await remapImagePixelsWithGpuFallback(data, invMap, width, height);
+                    }
                     logImageCipherDebug('single-decrypt-js-fallback-finish', {
                         method: imgMethod,
                         width,
@@ -2716,7 +2794,20 @@
             return { blob, name: `${baseName}${suffix}.${ext}` };
         }
 
-        function getImageRemapForMode(mode, width, height, blockW, blockH, keyStr) {
+        async function loadImageToPixelData(file) {
+            const imageSource = await loadImageSource(file);
+            const w = imageSource.width, h = imageSource.height;
+            const surface = createCanvasSurface(w, h);
+            try {
+                surface.ctx.drawImage(imageSource.source, 0, 0);
+            } finally {
+                imageSource.cleanup();
+            }
+            const imageData = surface.ctx.getImageData(0, 0, w, h);
+            return { imageData, width: w, height: h };
+        }
+
+        async function getImageRemapForMode(mode, width, height, blockW, blockH, keyStr) {
             const totalPixels = width * height;
             const cacheKey = (imgMethod === 'gilbert')
                 ? `gilbert:${width}:${height}:${keyStr}`
@@ -2724,19 +2815,48 @@
             const cachedMap = getMapCache(cacheKey);
             if (mode === 'encrypt') {
                 if (cachedMap && cachedMap.encMap) return cachedMap.encMap;
-                const encMap = imgMethod === 'gilbert'
-                    ? buildGilbertEncryptMap(width, height, keyStr)
-                    : buildBlockEncryptMap(width, height, blockW, blockH, keyStr);
+                let encMap;
+                const wasmFallback = await initImageCipherWasm();
+                if (wasmFallback) {
+                    try {
+                        encMap = (imgMethod === 'gilbert')
+                            ? wasmFallback.build_gilbert_encrypt_map(width, height, keyStr)
+                            : wasmFallback.build_block_encrypt_map(width, height, blockW, blockH, keyStr);
+                    } catch (e) {}
+                }
+                if (!encMap) {
+                    encMap = imgMethod === 'gilbert'
+                        ? buildGilbertEncryptMap(width, height, keyStr)
+                        : buildBlockEncryptMap(width, height, blockW, blockH, keyStr);
+                }
                 setMapCache(cacheKey, Object.assign({}, cachedMap || {}, { encMap }));
                 return encMap;
             }
             if (cachedMap && cachedMap.invMap) return cachedMap.invMap;
-            const encMap = cachedMap && cachedMap.encMap
-                ? cachedMap.encMap
-                : (imgMethod === 'gilbert'
+            let encMap = cachedMap && cachedMap.encMap ? cachedMap.encMap : null;
+            if (!encMap) {
+                const wasmFallback = await initImageCipherWasm();
+                if (wasmFallback) {
+                    try {
+                        encMap = (imgMethod === 'gilbert')
+                            ? wasmFallback.build_gilbert_encrypt_map(width, height, keyStr)
+                            : wasmFallback.build_block_encrypt_map(width, height, blockW, blockH, keyStr);
+                    } catch (e) {}
+                }
+            }
+            let invMap;
+            if (encMap) {
+                const wasmInv = await initImageCipherWasm();
+                if (wasmInv) {
+                    try { invMap = wasmInv.invert_map(encMap); } catch (e) {}
+                }
+            }
+            if (!invMap) {
+                if (!encMap) encMap = imgMethod === 'gilbert'
                     ? buildGilbertEncryptMap(width, height, keyStr)
-                    : buildBlockEncryptMap(width, height, blockW, blockH, keyStr));
-            const invMap = invertMap(encMap, totalPixels);
+                    : buildBlockEncryptMap(width, height, blockW, blockH, keyStr);
+                invMap = invertMap(encMap, totalPixels);
+            }
             setMapCache(cacheKey, Object.assign({}, cachedMap || {}, { encMap, invMap }));
             return invMap;
         }
@@ -2804,8 +2924,35 @@
                     applyXOR(data, getFixedXORKey(keyStr));
                 }
 
+                // Re-get pixel data if WASM worker transferred buffer
+                if (data.byteLength === 0) {
+                    imageData = ctx.getImageData(0, 0, width, height);
+                    data = imageData.data;
+                }
+
                 for (let i = 0; i < count; i++) {
-                    const remap = getImageRemapForMode(mode, width, height, blockW, blockH, keyStr);
+                    const remap = await getImageRemapForMode(mode, width, height, blockW, blockH, keyStr);
+                    const wasmRemap = await initImageCipherWasm();
+                    if (wasmRemap) {
+                        try {
+                            const input = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+                            const output = wasmRemap.remap_rgba(input, remap, width, height);
+                            if (output) data = new Uint8ClampedArray(output);
+                            await yieldToBrowser();
+                            logImageCipherDebug('batch-js-fallback-round-finish', {
+                                mode,
+                                method: imgMethod,
+                                round: i + 1,
+                                rounds: count,
+                                width,
+                                height,
+                                mapLength: remap.length
+                            });
+                            continue;
+                        } catch (e) {
+                            logImageCipherDebug('batch-wasm-remap-failed', { message: e.message });
+                        }
+                    }
                     data = await remapImagePixelsWithGpuFallback(data, remap, width, height);
                     logImageCipherDebug('batch-js-fallback-round-finish', {
                         mode,
@@ -2967,7 +3114,10 @@
             isProcessing = true; disableExportControls();
             beginImageProcessingKeepAlive();
             // Show PIXI gold sweep overlay during processing
-            if (window.__pixiGoldApp) window.__pixiGoldApp.canvas.style.opacity = '1';
+            if (window.__pixiGoldApp) {
+                window.__pixiGoldApp.canvas.style.opacity = '1';
+                window.__pixiGoldApp.ticker.stop();
+            }
             try {
                 await xorCompatibilityReady;
                 imageProgress.value = 0; downloadAllBtn.classList.remove('highlight');
@@ -2996,17 +3146,30 @@
                 }
                 
                 try {
+                    // Prefetch first image's pixel data (overlap decode with UI rendering)
+                    let nextPreload = previousProcessedImages.length === 0
+                        ? loadImageToPixelData(selectedImageFiles[0]) : null;
                     for (let idx = 0; idx < total; idx++) {
                         const file = selectedImageFiles[idx];
                         let inputFile = file;
+                        let preloadedData = null;
                         if (previousProcessedImages.length > 0 && idx < previousProcessedImages.length) {
                             const prevResult = previousProcessedImages[idx];
                             if (prevResult) {
                                 inputFile = createFileLike(prevResult.blob, prevResult.name);
                             }
                             previousProcessedImages[idx] = null;
+                        } else if (nextPreload) {
+                            // Use preloaded pixel data from previous iteration
+                            preloadedData = await nextPreload;
+                            nextPreload = null;
                         }
-                        const { blob, name } = await processImage(inputFile, mode, currentBlockW, currentBlockH, shouldApplyXOR);
+                        // Start loading next image while current processes
+                        const nextIdx = idx + 1;
+                        if (nextIdx < total && previousProcessedImages.length === 0) {
+                            nextPreload = loadImageToPixelData(selectedImageFiles[nextIdx]);
+                        }
+                        const { blob, name } = await processImage(inputFile, mode, currentBlockW, currentBlockH, shouldApplyXOR, preloadedData);
                         inputFile = null;
                         results[idx] = { blob, name };
                         completed++;
@@ -3049,8 +3212,11 @@
             finally {
                 isProcessing = false;
                 endImageProcessingKeepAlive();
-                // Pause PIXI gold ticker when idle — no forced layout during scroll
-                if (window.__pixiGoldApp) window.__pixiGoldApp.canvas.style.opacity = '0';
+                // Resume PIXI gold ticker when idle
+                if (window.__pixiGoldApp) {
+                    window.__pixiGoldApp.canvas.style.opacity = '0';
+                    window.__pixiGoldApp.ticker.start();
+                }
             }
         }
 

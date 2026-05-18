@@ -20,7 +20,10 @@ function processSync(wasm, msg) {
     msg.blockW, msg.blockH,
     msg.rounds, msg.xor
   );
-  return result.buffer;
+  // result is zero-copy subarray of WASM linear memory.
+  // WASM memory buffer is NOT transferable — structured clone of
+  // entire heap would be catastrophic. Copy out pixel data only.
+  return new Uint8Array(result);
 }
 
 function buildMapSync(wasm, msg) {
