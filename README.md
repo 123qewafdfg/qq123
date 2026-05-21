@@ -139,6 +139,7 @@ Cloudflare 推荐设置：
 
 ```
 ├── index.html                  # 主页面
+├── wrangler.jsonc              # Cloudflare Workers 部署配置
 ├── _headers                    # Cloudflare 响应头
 ├── CLOUDFLARE.md               # Cloudflare Workers 部署说明
 ├── tb.ico                      # 网站图标

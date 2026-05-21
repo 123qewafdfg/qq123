@@ -8,6 +8,7 @@
 - Build command: 留空
 - Deploy command: `npx wrangler deploy`
 - Root directory: `/`
+- Worker name: `yuan`
 
 ## 为什么需要这些文件
 
