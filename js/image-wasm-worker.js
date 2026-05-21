@@ -3,8 +3,15 @@ self.onmessage = async function(event) {
     if (message.type !== 'process') return;
 
     try {
-        const wasm = await import('../wasm/hilbert_image_cipher_wasm.js');
-        await wasm.default();
+        const assetVersion = new URL(self.location.href).searchParams.get('v') || '20260521-tcloud1';
+        const wasmModuleUrl = new URL('../wasm/hilbert_image_cipher_wasm.js', self.location.href);
+        const wasmBinaryUrl = new URL('../wasm/hilbert_image_cipher_wasm_bg.wasm', self.location.href);
+        wasmModuleUrl.searchParams.set('v', assetVersion);
+        wasmBinaryUrl.searchParams.set('v', assetVersion);
+
+        const wasm = await import(wasmModuleUrl.href);
+        const wasmResponse = await fetch(wasmBinaryUrl.href, { cache: 'force-cache' });
+        await wasm.default(wasmResponse);
 
         const method = message.method === 'block' ? wasm.CipherMethod.Block : wasm.CipherMethod.Gilbert;
         const mode = message.mode === 'decrypt' ? wasm.CipherMode.Decrypt : wasm.CipherMode.Encrypt;

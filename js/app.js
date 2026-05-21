@@ -801,11 +801,18 @@
             hasCreateImageBitmap: typeof createImageBitmap === 'function',
             webpTranscodeSupported: null
         };
-        const IMAGE_CIPHER_WASM_URL = new URL('../wasm/hilbert_image_cipher_wasm.js', document.currentScript && document.currentScript.src ? document.currentScript.src : window.location.href).href;
-        const IMAGE_CIPHER_WASM_BINARY_URL = new URL('../wasm/hilbert_image_cipher_wasm_bg.wasm', document.currentScript && document.currentScript.src ? document.currentScript.src : window.location.href).href;
-        const IMAGE_CIPHER_WORKER_URL = new URL('image-wasm-worker.js', document.currentScript && document.currentScript.src ? document.currentScript.src : window.location.href).href;
-        const JSZIP_URL = new URL('jszip.min.js', document.currentScript && document.currentScript.src ? document.currentScript.src : window.location.href).href;
-        const WASM_LOCALSTORAGE_KEY = '_wasm_binary_v1';
+        const ASSET_VERSION = '20260521-tcloud1';
+        const SCRIPT_BASE_URL = document.currentScript && document.currentScript.src ? document.currentScript.src : window.location.href;
+        function versionedAssetUrl(path) {
+            const url = new URL(path, SCRIPT_BASE_URL);
+            url.searchParams.set('v', ASSET_VERSION);
+            return url.href;
+        }
+        const IMAGE_CIPHER_WASM_URL = versionedAssetUrl('../wasm/hilbert_image_cipher_wasm.js');
+        const IMAGE_CIPHER_WASM_BINARY_URL = versionedAssetUrl('../wasm/hilbert_image_cipher_wasm_bg.wasm');
+        const IMAGE_CIPHER_WORKER_URL = versionedAssetUrl('image-wasm-worker.js');
+        const JSZIP_URL = versionedAssetUrl('jszip.min.js');
+        const WASM_LOCALSTORAGE_KEY = `_wasm_binary_${ASSET_VERSION}`;
         let imageCipherWasmPromise = null;
         let imageCipherWasmAvailable = true;
         let cachedWasmResponsePromise = null;
