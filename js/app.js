@@ -31,10 +31,7 @@
         }, 720);
     }
     window.addEventListener('load', () => {
-        const minimumLoadingMs = 1200;
-        const startedAt = window.__initialLoadingStartedAt || performance.now();
-        const elapsed = performance.now() - startedAt;
-        window.setTimeout(hideLoading, Math.max(0, minimumLoadingMs - elapsed));
+        hideLoading();
     });
 
     // Keep long-running work active on mobile. Browsers may throttle timers and
