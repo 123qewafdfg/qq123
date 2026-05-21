@@ -21,6 +21,22 @@
     // 替换全局alert函数
     window.alert = showAlert;
 
+    const loadingOverlay = document.getElementById('loadingOverlay');
+    function hideLoading() {
+        if (!loadingOverlay) return;
+        loadingOverlay.classList.add('is-leaving');
+        window.setTimeout(() => {
+            loadingOverlay.classList.remove('is-visible', 'is-leaving');
+            loadingOverlay.setAttribute('aria-hidden', 'true');
+        }, 720);
+    }
+    window.addEventListener('load', () => {
+        const minimumLoadingMs = 1200;
+        const startedAt = window.__initialLoadingStartedAt || performance.now();
+        const elapsed = performance.now() - startedAt;
+        window.setTimeout(hideLoading, Math.max(0, minimumLoadingMs - elapsed));
+    });
+
     // Keep long-running work active on mobile. Browsers may throttle timers and
     // rendering when the screen is about to sleep or the page loses focus.
     window.mobileWorkKeepAlive = (function() {

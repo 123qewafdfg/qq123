@@ -11,8 +11,16 @@
     <link rel="preload" as="fetch" href="wasm/hilbert_image_cipher_wasm_bg.wasm?v=20260521-tcloud1" crossorigin>
     <link rel="modulepreload" href="wasm/hilbert_image_cipher_wasm.js?v=20260521-tcloud1">
 <script src="js/FileSaver.min.js?v=20260521-tcloud1"></script>
+<script src="js/lottie-player.js?v=20260521-tcloud1"></script>
 </head>
 <body>
+<script>window.__initialLoadingStartedAt = performance.now();</script>
+<div class="loading-overlay is-visible" id="loadingOverlay" aria-live="polite" aria-hidden="false">
+    <div class="loading-panel">
+        <lottie-player class="loading-animation" src="img/sandy-loading.json" background="transparent" speed="1" loop autoplay></lottie-player>
+        <div class="loading-copy" id="loadingOverlayText">正在处理</div>
+    </div>
+</div>
 <div class="tool-card">
     <!-- 标签页 + 刷新按钮 -->
     <div class="module-tabs">
