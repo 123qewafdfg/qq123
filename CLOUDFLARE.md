@@ -1,19 +1,18 @@
-# Cloudflare Pages 专用部署说明
+# Cloudflare Workers 部署说明
 
-这个目录是 `123qewafdfg/qq123` 的 Cloudflare Pages 静态部署版本。
+这个目录是 `123qewafdfg/qq123` 的 Cloudflare Workers 静态资源部署版本。
 
-## Cloudflare Pages 设置
+## Cloudflare 设置
 
 - Production branch: `main`
-- Framework preset: `None`
 - Build command: 留空
-- Build output directory: `/`
+- Deploy command: `npx wrangler deploy`
 - Root directory: `/`
 
 ## 为什么需要这些文件
 
 - `_headers`：让 Cloudflare 正确返回 `.wasm` 的 `application/wasm`，同时给静态资源设置缓存。
-- `_redirects`：让直接访问任意路径时回到 `index.html`，避免 Pages 返回 404。
+- 不使用 `_redirects`：Wrangler 会把 `/* /index.html 200` 判定为无限循环，导致部署失败。
 
 ## 推送
 
@@ -21,4 +20,4 @@
 git push origin main
 ```
 
-如果 Cloudflare 之前绑定的是 `master`，请在 Cloudflare Pages 项目里改成 `main`，或者重新连接 `123qewafdfg/qq123`。
+如果 Cloudflare 之前绑定的是 `master`，请在 Workers 项目里改成 `main`，或者重新连接 `123qewafdfg/qq123`。
