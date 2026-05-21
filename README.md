@@ -120,14 +120,29 @@ WASM Worker → Main Thread WASM → WebGL GPU → Worker CPU → Main Thread CP
 
 ---
 
-## 🚀 部署
+## 🚀 Cloudflare Pages 部署
 
-直接上传到 Web 服务器根目录即可。
+本仓库是 Cloudflare Pages 专用静态版本，直接从 `123qewafdfg/qq123` 的 `main` 分支部署即可。
+
+Cloudflare Pages 推荐设置：
+
+- Framework preset：`None`
+- Build command：留空
+- Build output directory：`/`
+- Root directory：`/`
+
+仓库已包含 `_headers` 和 `_redirects`：
+
+- `_headers` 用于确保 `.wasm` 文件返回 `application/wasm`，并给 JS/CSS/WASM 设置缓存。
+- `_redirects` 用于避免刷新或直接访问路径时出现 404。
 
 ### 文件结构
 
 ```
 ├── index.html                  # 主页面
+├── _headers                    # Cloudflare Pages 响应头
+├── _redirects                  # Cloudflare Pages 路由回退
+├── CLOUDFLARE.md               # Cloudflare 部署说明
 ├── tb.ico                      # 网站图标
 ├── README.md                   # 本说明文档
 ├── LICENSE                     # 开源协议
