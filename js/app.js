@@ -22,12 +22,26 @@
     window.alert = showAlert;
 
     const loadingOverlay = document.getElementById('loadingOverlay');
+    let loadingOverlayShown = false;
+    const showLoadingTimer = window.setTimeout(() => {
+        if (!loadingOverlay || document.readyState === 'complete') return;
+        loadingOverlayShown = true;
+        loadingOverlay.classList.add('is-visible');
+        loadingOverlay.setAttribute('aria-hidden', 'false');
+    }, 250);
+
     function hideLoading() {
         if (!loadingOverlay) return;
+        window.clearTimeout(showLoadingTimer);
+        if (!loadingOverlayShown && !loadingOverlay.classList.contains('is-visible')) {
+            loadingOverlay.setAttribute('aria-hidden', 'true');
+            return;
+        }
         loadingOverlay.classList.add('is-leaving');
         window.setTimeout(() => {
             loadingOverlay.classList.remove('is-visible', 'is-leaving');
             loadingOverlay.setAttribute('aria-hidden', 'true');
+            loadingOverlayShown = false;
         }, 720);
     }
     window.addEventListener('load', () => {
