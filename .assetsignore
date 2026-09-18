@@ -20,5 +20,8 @@ THIRD-PARTY-NOTICES.md
 wrangler.jsonc
 .assetsignore
 
-# 本地预览脚本，不需要部署
+# 本地预览脚本与二维码，不需要部署
 serve.py
+make-qr.py
+qr-lan.png
+qr-lan.html

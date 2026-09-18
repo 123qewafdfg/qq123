@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>局域网访问二维码</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 20px;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #14100e; color: #ffdac9; padding: 32px 20px; box-sizing: border-box;
+  }
+  h1 { font-size: 1.5rem; margin: 0; font-weight: 700; }
+  .card {
+    background: #fff; padding: 20px; border-radius: 20px;
+    box-shadow: 0 16px 40px rgba(0,0,0,.45);
+  }
+  img { display: block; width: min(78vw, 420px); height: auto; image-rendering: pixelated; }
+  .url {
+    font-family: ui-monospace, Consolas, monospace; font-size: 1.45rem; font-weight: 700;
+    background: #2f2723; padding: 14px 26px; border-radius: 60px;
+    border: 2px solid #7a5f54; letter-spacing: .5px; user-select: all;
+  }
+  .hint { font-size: .95rem; color: #ffb09c; text-align: center; line-height: 1.7; max-width: 640px; }
+  .hint b { color: #ffdac9; }
+  ol { margin: 6px 0 0; padding-left: 1.3em; text-align: left; }
+  li { margin: 3px 0; }
+</style>
+</head>
+<body>
+  <h1>手机扫码访问</h1>
+  <div class="card"><img src="qr-lan.png" alt="局域网访问二维码"></div>
+  <div class="url">http://192.168.143.241:9191/</div>
+  <div class="hint">
+    <b>手机必须和电脑连同一个热点 / Wi-Fi。</b>
+    <ol>
+      <li>确认手机连的是同一个手机热点</li>
+      <li>关掉手机的移动数据（有些机型会优先走流量）</li>
+      <li>扫不出来就手动在浏览器输入上面的地址</li>
+      <li>打不开先看电脑上的防火墙提示，要点「允许访问」</li>
+    </ol>
+  </div>
+</body>
+</html>

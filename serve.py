@@ -149,10 +149,44 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
+    # 用法: python serve.py [port] [host]
+    #   host 默认 0.0.0.0 —— 绑定所有网卡，手机连同一热点时可直接访问
+    #   只在本机看的话可以传 127.0.0.1 更安全
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8123
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    host = sys.argv[2] if len(sys.argv) > 2 else "0.0.0.0"
+    server = ThreadingHTTPServer((host, port), Handler)
+
+    # 列出可用的局域网地址，方便手机访问
+    import socket
+    lan_ips = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith("127."):
+                lan_ips.append(ip)
+    except Exception:
+        pass
+    # 通过「连一下外网看走哪个网卡」拿到最可能的局域网 IP（不会真的发包）
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.0.2.1", 80))   # TEST-NET-1，仅用于选路
+        primary = s.getsockname()[0]
+        s.close()
+        if primary not in lan_ips:
+            lan_ips.insert(0, primary)
+        else:
+            lan_ips.remove(primary)
+            lan_ips.insert(0, primary)
+    except Exception:
+        pass
+
     print(f"serving {ROOT}")
-    print(f"http://127.0.0.1:{port}/")
+    print(f"  local   http://127.0.0.1:{port}/")
+    for ip in lan_ips:
+        print(f"  LAN     http://{ip}:{port}/")
+    if host == "0.0.0.0":
+        print("  (已绑定 0.0.0.0 —— 局域网内其它设备可访问；"
+              "Windows 首次可能弹出防火墙提示，需允许)")
     print(f"_headers rules loaded: {len(HEADER_RULES)}")
     print(f".assetsignore patterns loaded: {len(ASSETS_IGNORE)}"
           f" -> 这些文件本地与线上都返回 404: {', '.join(ASSETS_IGNORE[:6])}"
