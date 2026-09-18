@@ -1,0 +1,21 @@
+# 让 GitHub 正确识别文件类型与来源
+
+# 第三方库（vendored）——标为非自研代码，避免影响语言统计
+*.min.js linguist-language=JavaScript linguist-vendored=true
+js/lottie-player.js linguist-vendored=true
+
+# 二进制文件：禁止行尾转换，避免损坏
+*.wasm binary
+*.ico binary
+*.png binary
+*.jpg binary
+*.webp binary
+
+# 文本文件：统一按 LF 存储
+*.html text eol=lf
+*.css  text eol=lf
+*.js   text eol=lf
+*.md   text eol=lf
+*.py   text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
