@@ -2188,7 +2188,7 @@
                     removeLargeImageElement(modal);
                     await showLargeImageCompressLoader(largeInfos, () => compressLargeImportedImages(largeInfos));
                     await updateFirstImageCache();
-                    if (imgMethod === 'block' && encryptMethodModal.style.display === 'flex') updateBlockSizeOptions();
+                    if (imgMethod === 'block') updateBlockSizeOptions();
                 } else {
                     removeLargeImageElement(modal);
                     schedulePostImportDimensionWork();
@@ -2678,14 +2678,14 @@
                     selectedCountDisplay.value = `导入${selectedImageFiles.length}张图片，${largeCount}张大图`;
                     showLargeImageImportWarning(newlyLargeInfos);
                 }
-                if (imgMethod === 'block' && encryptMethodModal.style.display === 'flex') updateBlockSizeOptions();
+                if (imgMethod === 'block') updateBlockSizeOptions();
             }, 0);
         }
 
         function schedulePostImportDimensionWork() {
             window.setTimeout(() => {
                 updateFirstImageCache().then(() => {
-                    if (imgMethod === 'block' && encryptMethodModal.style.display === 'flex') updateBlockSizeOptions();
+                    if (imgMethod === 'block') updateBlockSizeOptions();
                 });
             }, 0);
         }
