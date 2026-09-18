@@ -1,0 +1,24 @@
+# 部署时不该上传的文件
+# Cloudflare Workers 静态资源默认会上传 assets.directory 下的所有内容，
+# 这里把文档、版本控制元数据、许可证文本等排除掉，避免它们变成可公开下载的资源。
+#
+# 重要：这个目录里永远不要放密钥、token 或 .env 文件 —— 它们会被一起部署。
+
+.git
+.gitignore
+.gitattributes
+
+# 文档
+README.md
+README-DEPLOY.md
+README-服务器部署版.txt
+CLOUDFLARE.md
+LICENSE
+THIRD-PARTY-NOTICES.md
+
+# Wrangler 配置本身不需要对外提供
+wrangler.jsonc
+.assetsignore
+
+# 本地预览脚本，不需要部署
+serve.py
