@@ -100,6 +100,16 @@ export function build_gilbert_encrypt_map(width, height, key) {
 }
 
 /**
+ * 清空内部的吉尔伯特曲线缓存。
+ *
+ * 曲线缓存只保留最近一次的尺寸，用于加速「批量处理同尺寸图片」与「重加密」。
+ * 一般不需要调用；内存紧张或切换到大图时可以主动释放。
+ */
+export function clear_curve_cache() {
+    wasm.clear_curve_cache();
+}
+
+/**
  * @param {Uint32Array} map
  * @returns {Uint32Array}
  */
