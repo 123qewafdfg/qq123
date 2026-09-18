@@ -108,8 +108,47 @@ def is_ignored(url_path):
 
 
 class Handler(SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=ROOT, **kwargs)
+    # 注意：BaseHTTPRequestHandler.__init__ 内部就会开始处理请求，
+    # 所以不能在 __init__ 里给实例属性赋值后再调用 super()——那时已经在发头了。
+    # 这里用「按需创建」的方式，保证任何时刻访问都安全。
+
+    def _sent(self):
+        headers = getattr(self, "_sent_headers", None)
+        if headers is None:
+            headers = set()
+            self._sent_headers = headers
+        return headers
+
+    def setup(self):
+        # 用 setup() 而不是 __init__ 来设置服务根目录：
+        # BaseHTTPRequestHandler.__init__ 内部就会开始处理请求，
+        # 在那里做初始化太晚（send_response 已经调用过 send_header 了）。
+        super().setup()
+        self.directory = ROOT
+
+    def send_header(self, keyword, value):
+        # Python 自带的 SimpleHTTPRequestHandler 已经会发 Content-Type、
+        # Cache-Control 等头，而 _headers 规则里也有同名头。
+        # 直接重复发送会产生 "text/html,text/html" 这种不合理的合并值，
+        # 所以这里记录已发过的头，重复的由 _headers 规则覆盖。
+        sent = self._sent()
+        key = keyword.lower()
+        if key in sent:
+            self._override_header(keyword, value)
+            return
+        sent.add(key)
+        super().send_header(keyword, value)
+
+    def _override_header(self, keyword, value):
+        """覆盖已发送的同名头：从内部缓冲里删掉旧的，再写新的。"""
+        headers = getattr(self, "_headers_buffer", None)
+        if not headers:
+            super().send_header(keyword, value)
+            return
+        prefix = (keyword + ":").encode("latin-1", "replace").lower()
+        self._headers_buffer = [h for h in headers
+                                if not h.lower().startswith(prefix)]
+        super().send_header(keyword, value)
 
     def guess_type(self, path):
         ext = os.path.splitext(path)[1].lower()
@@ -137,12 +176,29 @@ class Handler(SimpleHTTPRequestHandler):
 
     def end_headers(self):
         url_path = self.path.split("?")[0]
+        # _headers 规则应当【覆盖】Python 的默认头，而不是叠加。
+        # Python 的 send_header 只会往缓冲区追加，所以这里先把同名旧头删掉。
         for key, value in match_headers(HEADER_RULES, url_path).items():
-            self.send_header(key, value)
+            self._remove_buffered_header(key)
+            self._sent().discard(key.lower())
+            super().send_header(key, value)   # 直接发给底层，绕过去重逻辑
+            self._sent().add(key.lower())
         # 本地预览不需要缓存，否则改了文件刷新看不到
+        self._remove_buffered_header("Cache-Control")
         self.send_header("Cache-Control", "no-store, must-revalidate")
         self.send_header("Pragma", "no-cache")
         super().end_headers()
+
+    def _remove_buffered_header(self, name):
+        """从待发送的头缓冲区里删除指定名字的头（大小写不敏感）。"""
+        buf = getattr(self, "_headers_buffer", None)
+        if not buf:
+            return
+        prefix = (name + ":").encode("latin-1", "replace").lower()
+        self._headers_buffer = [
+            h for h in buf
+            if not (isinstance(h, (bytes, bytearray)) and h.lower().startswith(prefix))
+        ]
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
