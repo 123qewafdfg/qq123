@@ -1,5 +1,3 @@
-/* @ts-self-types="./hilbert_image_cipher_wasm.d.ts" */
-
 /**
  * @enum {0 | 1}
  */
@@ -22,10 +20,7 @@ export const CipherMode = Object.freeze({
 export function apply_xor_rgba(data) {
     var ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
     var len0 = WASM_VECTOR_LEN;
-    const ret = wasm.apply_xor_rgba(ptr0, len0, data);
-    if (ret[1]) {
-        throw takeFromExternrefTable0(ret[0]);
-    }
+    wasm.apply_xor_rgba(ptr0, len0, data);
 }
 
 /**
@@ -118,6 +113,7 @@ export function invert_map(map) {
 }
 
 /**
+ * 组合入口：单轮置乱（+ 可选色彩反转）
  * @param {Uint8Array} data
  * @param {number} width
  * @param {number} height
@@ -144,6 +140,7 @@ export function process_rgba(data, width, height, method, mode, key, block_width
 }
 
 /**
+ * 组合入口：多轮置乱（+ 可选色彩反转）
  * @param {Uint8Array} data
  * @param {number} width
  * @param {number} height
@@ -203,22 +200,23 @@ export function simple_hash(key) {
 }
 
 /**
+ * 二次加密的固定密钥（与 JS 端 `XOR_FIXED_KEY` 一致）
  * @returns {number}
  */
 export function xor_fixed_key() {
     const ret = wasm.xor_fixed_key();
-    return ret;
+    return ret >>> 0;
 }
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
-        __wbg___wbindgen_copy_to_typed_array_787746aeb47818bc: function(arg0, arg1, arg2) {
+        __wbg___wbindgen_copy_to_typed_array_cccd104be8cf0b8d: function(arg0, arg1, arg2) {
             new Uint8Array(arg2.buffer, arg2.byteOffset, arg2.byteLength).set(getArrayU8FromWasm0(arg0, arg1));
         },
-        __wbg___wbindgen_throw_9c31b086c2b26051: function(arg0, arg1) {
+        __wbg___wbindgen_throw_5d9e815e6fdf150f: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
-        __wbindgen_cast_0000000000000001: function(arg0, arg1) {
+        __wbindgen_generic_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
             return ret;
@@ -368,11 +366,15 @@ function __wbg_finalize_init(instance, module) {
 
 async function __wbg_load(module, imports) {
     if (typeof Response === 'function' && module instanceof Response) {
+        if (!module.ok) {
+            throw new Error(`failed to fetch Wasm: ${module.status} ${module.statusText} fetching '${module.url}'`);
+        }
+
         if (typeof WebAssembly.instantiateStreaming === 'function') {
             try {
                 return await WebAssembly.instantiateStreaming(module, imports);
             } catch (e) {
-                const validResponse = module.ok && expectedResponseType(module.type);
+                const validResponse = expectedResponseType(module.type);
 
                 if (validResponse && module.headers.get('Content-Type') !== 'application/wasm') {
                     console.warn("`WebAssembly.instantiateStreaming` failed because your server does not serve Wasm with `application/wasm` MIME type. Falling back to `WebAssembly.instantiate` which is slower. Original error:\n", e);
