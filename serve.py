@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """本地预览服务器 —— 目的是尽量贴近线上环境，而不是 file:// 离线打开。
 
-它比 `python -m http.server` 多做三件事：
+它比 `python -m http.server` 多做四件事：
   1. 给 CSS / JS / HTML 明确返回 charset=utf-8（python 自带的只有裸 MIME，
      中文在按 GBK 猜编码的浏览器上会乱码）
   2. 读取并应用项目里的 `_headers` 文件（Cloudflare Workers 静态资源的行为），
      这样本地就能验证 CSP 会不会把 WASM 拦掉
-  3. 关闭缓存，避免刷新后看到旧文件
+  3. 读取并应用 `.assetsignore`，被排除的文件返回 404 —— 与线上一致，
+     可以本地确认文档、许可证、wrangler 配置不会泄漏到公网
+  4. 关闭缓存，避免刷新后看到旧文件
 
 用法： python serve.py [port]
 """
 import sys
 import os
+import fnmatch
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -72,6 +75,38 @@ def match_headers(rules, url_path):
 HEADER_RULES = load_headers_file(os.path.join(ROOT, "_headers"))
 
 
+def load_assetsignore(path):
+    """读取 `.assetsignore`，返回要排除的文件名/路径模式列表。"""
+    patterns = []
+    if not os.path.exists(path):
+        return patterns
+    with open(path, "r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if line and not line.startswith("#"):
+                patterns.append(line)
+    return patterns
+
+
+ASSETS_IGNORE = load_assetsignore(os.path.join(ROOT, ".assetsignore"))
+
+
+def is_ignored(url_path):
+    """判断某路径是否被 .assetsignore 排除（模拟 Cloudflare 的上传排除行为）。"""
+    rel = url_path.lstrip("/")
+    if not rel:
+        return False
+    base = os.path.basename(rel)
+    for pat in ASSETS_IGNORE:
+        p = pat.lstrip("/")
+        if fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(base, p) or rel == p or base == p:
+            return True
+        # 目录前缀：例如 ".git"
+        if rel == p or rel.startswith(p + "/"):
+            return True
+    return False
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
@@ -81,6 +116,24 @@ class Handler(SimpleHTTPRequestHandler):
         if ext in CHARSET_TYPES:
             return CHARSET_TYPES[ext]
         return super().guess_type(path)
+
+    def do_GET(self):
+        url_path = self.path.split("?")[0]
+        # 与线上一致：被 .assetsignore 排除的文件不提供
+        if is_ignored(url_path):
+            body = (
+                "<!DOCTYPE html><meta charset=\"utf-8\">"
+                "<h1>404 Not Found</h1><p>该文件被 <code>.assetsignore</code> 排除，"
+                "线上也不会提供（本地模拟 Cloudflare 的行为）。</p>"
+            ).encode("utf-8")
+            self.send_response(404)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        super().do_GET()
 
     def end_headers(self):
         url_path = self.path.split("?")[0]
@@ -101,6 +154,9 @@ def main():
     print(f"serving {ROOT}")
     print(f"http://127.0.0.1:{port}/")
     print(f"_headers rules loaded: {len(HEADER_RULES)}")
+    print(f".assetsignore patterns loaded: {len(ASSETS_IGNORE)}"
+          f" -> 这些文件本地与线上都返回 404: {', '.join(ASSETS_IGNORE[:6])}"
+          f"{' ...' if len(ASSETS_IGNORE) > 6 else ''}")
     global_rules = match_headers(HEADER_RULES, "/index.html")
     csp = global_rules.get("Content-Security-Policy")
     print("CSP active: %s" % ("yes" if csp else "no"))
