@@ -1,0 +1,19 @@
+# 本地开发工具 —— 不纳入版本控制，也不随部署上传
+# （.assetsignore 负责挡住部署；这里负责挡住 git 跟踪）
+#
+# 注意：不是安全问题（这些文件不含密钥），只是与本项目源码无关、
+# 且 qr-lan.* 里含有本机局域网地址，没必要公开。
+
+serve.py
+make-qr.py
+qr-lan.png
+qr-lan.html
+
+# 打包产物
+*.zip
+*.bundle
+
+# 系统文件
+.DS_Store
+Thumbs.db
+Desktop.ini
