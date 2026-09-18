@@ -19,3 +19,9 @@ THIRD-PARTY-NOTICES.md
 # Wrangler 配置本身不需要对外提供
 wrangler.jsonc
 .assetsignore
+
+# 本地开发工具（预览服务器、二维码生成）—— 只在本机用，不部署
+serve.py
+make-qr.py
+qr-lan.png
+qr-lan.html
