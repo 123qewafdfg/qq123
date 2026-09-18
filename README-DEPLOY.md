@@ -1,6 +1,7 @@
 # 小番茄 · 视频+图片合并版 —— 部署包
 
-这是可直接部署的版本。整个目录就是网站根目录，**428 KB**，无需构建步骤。
+这是可直接部署的版本。整个目录就是网站根目录，**443 KB**，无需构建步骤。
+目录里**只包含运行时会用到的文件**，本地开发工具（预览脚本、二维码生成）都不在里面。
 
 ```
 qq123-deploy/
@@ -11,7 +12,7 @@ qq123-deploy/
 ├── .assetsignore               # 指定哪些文件不上传
 ├── LICENSE                     # 本项目开源协议
 ├── THIRD-PARTY-NOTICES.md      # 第三方组件版权声明（MIT 合规要求）
-├── serve.py                    # 本地预览脚本（已被 .assetsignore 排除，不会上传）
+├── README-DEPLOY.md            # 本文件
 ├── css/
 │   └── style.css
 ├── js/
@@ -32,13 +33,20 @@ qq123-deploy/
 **必须通过 HTTP 访问**，不能双击 `index.html`（`file://` 下 WASM 与 Worker 都加载不了，
 页面会静默降级成纯 JS 慢速模式）。
 
+本部署包是纯净的线上产物，**不含本地预览脚本**。
+预览脚本备份在开发目录 `../_audit/serve.py`，把它复制到本目录后运行：
+
 ```bash
-python serve.py 8124
+cp ../_audit/serve.py .        # Windows: copy ..\_audit\serve.py .
+python serve.py 8124           # 只在本机看
+python serve.py 9191 0.0.0.0   # 允许局域网/手机访问（会打印可用地址）
 # 然后打开 http://127.0.0.1:8124/
 ```
 
-不要用 `python -m http.server`——它不返回 `charset=utf-8`，也不读 `_headers`，
-在中文 Windows 上会导致 CSS/JS 中文乱码，而且**无法在本地验证 CSP**。
+**不要用 `python -m http.server`**——它不返回 `charset=utf-8`，也不读 `_headers`
+和 `.assetsignore`，会导致中文乱码、无法在本地验证 CSP，也会把本该排除的文件暴露出来。
+
+> 若直接在 Cloudflare 上测试，则不需要这个脚本。
 
 ---
 
